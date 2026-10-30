@@ -53,23 +53,7 @@ await page.fill('[data-fl="x"]', '5'); await page.dispatchEvent('[data-fl="x"]',
 ok('overlap is flagged', await page.isVisible('.warn'));
 await page.fill('[data-fl="x"]', '9'); await page.dispatchEvent('[data-fl="x"]', 'change'); await page.waitForTimeout(300);
 ok('overlap cleared', !(await page.isVisible('.warn')));
-// ctrl directional scale on the floor: grow east, west edge stays at x = 4
-await page.keyboard.press('3');
-await page.keyboard.down('Control');
-await page.evaluate(() => {
-  const t = __mt.transform;
-  t.axis = 'X';
-  t.pointStart.set(1, 0, 0);
-  t.dispatchEvent({ type: 'dragging-changed', value: true });
-  t.object.scale.x = 14;
-  t.dispatchEvent({ type: 'objectChange' });
-  t.dispatchEvent({ type: 'dragging-changed', value: false });
-});
-await page.keyboard.up('Control');
-await page.keyboard.press('1');
-st = await saved();
-const f2 = st.floors[1];
-ok('floor scaled east, west edge pinned', f2.w === 14 && Math.abs(f2.pos[0] - f2.w / 2 - 4) < 1e-6, JSON.stringify(f2));
+// (floor resizing with the scale box is covered by tests/e2e-floorscale.mjs)
 await page.screenshot({ path: '/tmp/meshtype-floors.png', clip: { x: 262, y: 70, width: 730, height: 650 } });
 await page.keyboard.press('b');
 ok('floor mode off', !(await page.evaluate(() => document.body.classList.contains('floor-mode'))));
@@ -85,7 +69,7 @@ const gltf = JSON.parse(buf.slice(20, 20 + buf.readUInt32LE(12)).toString());
 const names = gltf.nodes.map((n) => n.name);
 ok('GLB has both floors + desk', names.includes('desk-col') && names.includes('floor-1-col') && names.includes('floor-2-col'), JSON.stringify(names));
 const man = JSON.parse(fs.readFileSync(await jsonDl.path(), 'utf8'));
-ok('room JSON lists floors', man.floors.length === 2 && man.floors[1].size[0] === 14, JSON.stringify(man.floors));
+ok('room JSON lists floors', man.floors.length === 2 && man.floors[1].size[0] === 10, JSON.stringify(man.floors));
 ok('floor has a texture', (gltf.images || []).length >= 1);
 console.log('ERRORS:', errs.join('\n') || 'none');
 await browser.close();

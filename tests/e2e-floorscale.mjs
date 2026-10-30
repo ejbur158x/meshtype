@@ -1,0 +1,54 @@
+// Floor scale box (edge planted) + floor custom texture. Serve the repo on :8123 first.
+import { chromium } from 'playwright';
+const browser = await chromium.launch({ args: ['--use-gl=swiftshader', '--enable-webgl', '--ignore-gpu-blocklist', '--enable-unsafe-swiftshader'] });
+const page = await (await browser.newContext({ viewport: { width: 1300, height: 760 } })).newPage();
+page.setDefaultTimeout(60000);
+const errs = [];
+page.on('pageerror', (e) => errs.push('PAGEERR ' + e.message));
+page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+let failures = 0;
+const ok = (n, c, x = '') => { console.log(c ? 'PASS' : 'FAIL', n, x); if (!c) failures++; };
+const seed = { app: 'meshtype', name: 'f', nextId: 10, sel: [], assets: {}, floor: { grid: 0.5, show: true }, floors: [{ id: 1, name: 'Floor', pos: [0, 0, 0], w: 4, d: 4, rotY: 0, preset: 'tile' }], nodes: [] };
+const st = () => page.evaluate(() => JSON.parse(JSON.stringify(__mt.getState())));
+await page.goto('http://localhost:8123/?test');
+await page.evaluate((s) => { localStorage.clear(); localStorage.setItem('meshtype.autosave', JSON.stringify(s)); }, seed);
+await page.reload(); await page.waitForTimeout(1500);
+await page.keyboard.press('b');
+await page.click('[data-floor="1"]');
+await page.evaluate(() => __mt.camera.position.multiplyScalar(1.8));
+await page.keyboard.press('3'); await page.waitForTimeout(400);
+ok('floor gets the scale box', await page.evaluate(() => __mt.sbox.group.visible && !__mt.transform.object));
+const handleXY = (p) => page.evaluate((p) => {
+  const h = __mt.sbox.handles.find((m) => m.userData.handle.p.join() === p.join());
+  const v = h.getWorldPosition(new h.position.constructor()).project(__mt.camera);
+  const r = document.querySelector('#view').getBoundingClientRect();
+  return { x: r.left + ((v.x + 1) / 2) * r.width, y: r.top + ((1 - v.y) / 2) * r.height };
+}, p);
+const a = await handleXY([1, -1, 0]), b = await handleXY([-1, -1, 0]);
+const L = Math.hypot(a.x - b.x, a.y - b.y);
+await page.mouse.move(a.x, a.y); await page.mouse.down(); await page.mouse.move(a.x + ((a.x - b.x) / L) * 220, a.y + ((a.y - b.y) / L) * 220, { steps: 8 }); await page.mouse.up();
+await page.waitForTimeout(300);
+let f = (await st()).floors[0];
+ok('floor grew east, west edge planted at -2', f.w > 4 && Math.abs(f.pos[0] - f.w / 2 + 2) < 1e-6 && f.d === 4, JSON.stringify(f));
+// corner handle
+const c = await handleXY([-1, -1, -1]);
+await page.mouse.move(c.x, c.y); await page.mouse.down(); await page.mouse.move(c.x - 60, c.y - 40, { steps: 8 }); await page.mouse.up();
+await page.waitForTimeout(300);
+const f2 = (await st()).floors[0];
+const east = f.pos[0] + f.w / 2, south = f.pos[2] + f.d / 2;
+ok('corner drag keeps the opposite corner', Math.abs(f2.pos[0] + f2.w / 2 - east) < 1e-6 && Math.abs(f2.pos[2] + f2.d / 2 - south) < 1e-6, JSON.stringify(f2));
+// texture
+const png = Buffer.from(await page.evaluate(() => { const c = document.createElement('canvas'); c.width = c.height = 64; const x = c.getContext('2d'); x.fillStyle = '#d33'; x.fillRect(0, 0, 64, 64); x.fillStyle = '#fff'; x.fillRect(0, 0, 32, 32); x.fillRect(32, 32, 32, 32); return c.toDataURL('image/png').split(',')[1]; }), 'base64');
+await page.click('[data-fact="tex"]').catch(() => {});
+await page.setInputFiles('#file-tex', { name: 'checker.png', mimeType: 'image/png', buffer: png }); await page.waitForTimeout(800);
+f = (await st()).floors[0];
+ok('floor texture set', !!f.tex && f.texSize === 1 && await page.isVisible('[data-fltex]'), JSON.stringify(f));
+await page.$eval('[data-fltex]', (e) => { e.value = '2'; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); });
+ok('tile size saved', (await st()).floors[0].texSize === 2);
+await page.keyboard.press('1');
+await page.screenshot({ path: '/tmp/meshtype-floortex.png', clip: { x: 262, y: 70, width: 730, height: 650 } });
+await page.click('[data-fact="tex-clear"]'); await page.waitForTimeout(300);
+ok('back to preset', !(await st()).floors[0].tex);
+console.log('ERRORS:', errs.join('\n') || 'none');
+await browser.close();
+process.exit(failures || errs.length ? 1 : 0);

@@ -1,4 +1,4 @@
-// Meshtype v0.6.0
+// Meshtype v0.6.1
 // A small browser mesh editor: squircle primitives, union / negate / split,
 // edge rounding, SVG extrusion, GLB export.
 
@@ -14,7 +14,7 @@ import { inspectSvg, makeSvgGeometry } from './svg.js';
 import { roundMesh, boxUVs } from './rounder.js';
 import { FLOORS, floorMaterial } from './floor.js';
 
-const VERSION = '0.6.0';
+const VERSION = '0.6.1';
 const STORE_KEY = 'meshtype.autosave';
 
 const PRESETS = {
@@ -146,6 +146,7 @@ function sanitizeFloorItem(f) {
     w: clamp(Number(src.w) || 10, 0.5, 200),
     d: clamp(Number(src.d) || 10, 0.5, 200),
     preset: FLOORS[src.preset] ? src.preset : 'tile',
+    ...(typeof src.tex === 'string' && src.tex ? { tex: src.tex, texSize: clamp(Number(src.texSize) || 1, 0.05, 20) } : {}),
   };
 }
 /** v0.3 had one baseplate in data.floor; v0.4 has a list. */
@@ -562,12 +563,26 @@ function overlappingFloors() {
   return bad;
 }
 
+/** Tile size in meters for a floor: its own image's tile size, or the preset's. */
+function floorTile(f) {
+  return f.tex && state.assets[f.tex] ? f.texSize || 1 : FLOORS[f.preset].tile;
+}
+
 function floorMat(preset, f) {
-  const m = floorMaterial(preset).clone();
-  m.map = m.map.clone();
-  if (m.emissiveMap) m.emissiveMap = m.map;
-  const tile = FLOORS[preset].tile;
-  m.map.repeat.set(f.w / tile, f.d / tile);
+  let m;
+  if (f.tex && state.assets[f.tex]) {
+    // custom image: a plain material, the image tinted by nothing
+    const base = baseTexture(f.tex);
+    m = new THREE.MeshPhysicalMaterial({ roughness: 0.6, metalness: 0 });
+    m.map = base ? base.clone() : null;
+    if (m.map) m.map.needsUpdate = true;
+  } else {
+    m = floorMaterial(preset).clone();
+    m.map = m.map.clone();
+    if (m.emissiveMap) m.emissiveMap = m.map;
+  }
+  const tile = floorTile(f);
+  if (m.map) m.map.repeat.set(f.w / tile, f.d / tile);
   return m;
 }
 
@@ -589,19 +604,20 @@ function syncFloors() {
       edges.renderOrder = 12;
       mesh.add(edges);
       scene.add(mesh);
-      r = { mesh, edges, preset: f.preset };
+      r = { mesh, edges, preset: f.preset + '|' + (f.tex || '') };
       frt.set(f.id, r);
     }
-    if (r.preset !== f.preset) {
+    const look = f.preset + '|' + (f.tex || '');
+    if (r.preset !== look) {
       r.mesh.material.dispose();
       r.mesh.material = floorMat(f.preset, f);
-      r.preset = f.preset;
+      r.preset = look;
     }
     r.mesh.position.fromArray(f.pos);
     r.mesh.rotation.set(0, deg2rad(f.rotY), 0);
     r.mesh.scale.set(f.w, 1, f.d);
-    const tile = FLOORS[f.preset].tile;
-    r.mesh.material.map.repeat.set(f.w / tile, f.d / tile);
+    const tile = floorTile(f);
+    if (r.mesh.material.map) r.mesh.material.map.repeat.set(f.w / tile, f.d / tile);
     r.mesh.visible = state.floor.show;
     const sel = view.floorMode && view.floorSel === f.id;
     r.edges.material = bad.has(f.id) ? floorEdgeMat.bad : sel ? floorEdgeMat.sel : floorEdgeMat.idle;
@@ -1645,6 +1661,7 @@ function gcAssets() {
     if (n.asset) used.add(n.asset);
     if (n.tex) used.add(n.tex);
   }
+  for (const f of state.floors) if (f.tex) used.add(f.tex);
   for (const k of Object.keys(state.assets)) if (!used.has(k)) delete state.assets[k];
 }
 
@@ -2779,6 +2796,18 @@ scene.add(sbox.group);
 
 /** The box we scale: the object's own oriented box for one part, the world box for several things. */
 function scaleFrame() {
+  if (view.floorMode) {
+    const fl = floorById(view.floorSel);
+    if (!fl) return null;
+    return {
+      O: new THREE.Vector3().fromArray(fl.pos),
+      Q: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), deg2rad(fl.rotY)),
+      min: new THREE.Vector3(-fl.w / 2, -0.06, -fl.d / 2),
+      max: new THREE.Vector3(fl.w / 2, 0, fl.d / 2),
+      single: null,
+      floor: { id: fl.id, w: fl.w, d: fl.d, pos: fl.pos.slice() },
+    };
+  }
   const sel = liveSel();
   const lv = selLeaves().filter((o) => o.visible);
   if (!lv.length) return null;
@@ -2800,7 +2829,7 @@ function scaleFrame() {
 }
 
 function updateScaleBox() {
-  const show = view.mode === 'scale' && !view.floorMode && liveSel().length > 0;
+  const show = view.mode === 'scale' && (view.floorMode ? view.floorSel != null : liveSel().length > 0);
   const f = show ? (sbox.drag ? sbox.drag.live || sbox.drag.frame : scaleFrame()) : null;
   sbox.group.visible = !!f;
   if (!f) return;
@@ -2813,6 +2842,7 @@ function updateScaleBox() {
   sbox.outline.scale.set(Math.max(size.x, 1e-4), Math.max(size.y, 1e-4), Math.max(size.z, 1e-4));
   const wp = new THREE.Vector3();
   for (const h of sbox.handles) {
+    h.visible = !(f.floor && h.userData.handle.top); // floors only resize flat
     const p = h.userData.handle.p;
     h.position.set(c.x + (p[0] * size.x) / 2, c.y + (p[1] * size.y) / 2, c.z + (p[2] * size.z) / 2);
     h.getWorldPosition(wp);
@@ -2827,7 +2857,7 @@ function pickHandle(clientX, clientY) {
   const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
   raycaster.setFromCamera(ndc, camera);
   sbox.group.updateMatrixWorld(true);
-  const hit = raycaster.intersectObjects(sbox.handles, false)[0];
+  const hit = raycaster.intersectObjects(sbox.handles.filter((h) => h.visible), false)[0];
   return hit ? hit.object : null;
 }
 
@@ -2913,6 +2943,21 @@ function boxScaleMove(e) {
   const q = new THREE.Quaternion();
   const sc = new THREE.Vector3();
   const eu = new THREE.Euler();
+  if (f.floor) {
+    const fl = floorById(f.floor.id);
+    if (fl) {
+      const c = new THREE.Vector3((nmin.x + nmax.x) / 2, 0, (nmin.z + nmax.z) / 2).applyQuaternion(f.Q).add(f.O);
+      fl.w = round(Math.max(0.5, nmax.x - nmin.x));
+      fl.d = round(Math.max(0.5, nmax.z - nmin.z));
+      fl.pos = [round(c.x), fl.pos[1], round(c.z)];
+      syncFloors();
+      updateFloorFields(fl);
+    }
+    const sz = nmax.clone().sub(nmin);
+    const hint = $('#hint');
+    if (hint) hint.textContent = `Floor ${sz.x.toFixed(2)} × ${sz.z.toFixed(2)} m · scaling from ${fromCenter ? 'the center' : 'the planted side'}`;
+    return;
+  }
   for (const { o, m, scl } of d.leaves) {
     if (f.single) {
       // one part in its own frame: pure scale, no shear
@@ -2942,7 +2987,11 @@ function boxScaleMove(e) {
 function endBoxScale() {
   sbox.drag = null;
   const hint = $('#hint');
-  if (hint) hint.textContent = 'WASD fly · Q down · E up · Shift fine · Ctrl fast · right-click for the menu';
+  if (hint) {
+    hint.textContent = view.floorMode
+      ? 'FLOOR MODE · parts are locked · click a floor to pick it · drag to slide · 1/2/3 move/rotate/scale · B to finish'
+      : 'WASD fly · Q down · E up · Shift fine · Ctrl fast · right-click for the menu';
+  }
   commit();
   renderInspector();
 }
@@ -3191,6 +3240,18 @@ el.canvas.addEventListener('pointerdown', (e) => {
   if (e.button === 1) e.preventDefault(); // no middle-click autoscroll
   const onGizmo = transform.axis !== null && transform.axis !== undefined;
   downInfo = { x: e.clientX, y: e.clientY, button: e.button, onGizmo, box: false, ground: null, floor: null };
+  if (e.button === 0 && view.mode === 'scale') {
+    const h = pickHandle(e.clientX, e.clientY);
+    if (h && beginBoxScale(h, e)) {
+      downInfo.sbox = true;
+      try {
+        el.canvas.setPointerCapture(e.pointerId);
+      } catch (err) {
+        /* ignore */
+      }
+      return;
+    }
+  }
   if (view.floorMode) {
     if (e.button !== 0 || onGizmo) return;
     const rect = el.canvas.getBoundingClientRect();
@@ -3254,6 +3315,10 @@ el.canvas.addEventListener('pointermove', (e) => {
   const d = downInfo;
   if (!d && view.mode === 'scale') el.canvas.style.cursor = pickHandle(e.clientX, e.clientY) ? 'grab' : '';
   if (!d || d.button !== 0 || d.onGizmo) return;
+  if (d.sbox) {
+    if (sbox.drag) boxScaleMove(e);
+    return;
+  }
   if (d.floor) {
     if (!d.floor.active && Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4) d.floor.active = true;
     if (!d.floor.active) return;
@@ -3380,6 +3445,15 @@ el.canvas.addEventListener('pointerup', (e) => {
   const info = downInfo;
   downInfo = null;
   const moved = Math.hypot(e.clientX - info.x, e.clientY - info.y);
+  if (info.sbox) {
+    try {
+      el.canvas.releasePointerCapture(e.pointerId);
+    } catch (err) {
+      /* ignore */
+    }
+    if (sbox.drag) endBoxScale();
+    return;
+  }
   if (view.floorMode) {
     if (info.floor && info.floor.active) {
       commit();
@@ -3706,9 +3780,29 @@ el.fileOpen.addEventListener('change', async () => {
   }
 });
 $('#btn-svg').addEventListener('click', () => el.fileSvg.click());
+let floorTexTarget = null;
 el.fileTex.addEventListener('change', async () => {
   const file = el.fileTex.files && el.fileTex.files[0];
   el.fileTex.value = '';
+  if (floorTexTarget != null) {
+    const fl = floorById(floorTexTarget);
+    floorTexTarget = null;
+    if (!file || !fl) return;
+    try {
+      const url = await shrinkImage(file, 1024);
+      const id = `img${state.nextId++}`;
+      state.assets[id] = url;
+      fl.tex = id;
+      if (!fl.texSize) fl.texSize = 1;
+      syncFloors();
+      commit();
+      renderInspector();
+      toast('Floor texture applied. Use Tile size to scale it.');
+    } catch (err) {
+      toast('Could not load that image: ' + err.message);
+    }
+    return;
+  }
   const n = state.sel.length === 1 ? node(state.sel[0]) : null;
   if (!file || !n) return;
   try {
@@ -3856,12 +3950,9 @@ async function exportRoom() {
       let m;
       if (strip) m = plain();
       else {
-        m = floorMaterial(fl.preset).clone();
-        m.map = m.map.clone();
-        const tile = FLOORS[fl.preset].tile;
-        m.map.repeat.set(1 / tile, 1 / tile);
-        m.map.needsUpdate = true;
-        if (m.emissiveMap) m.emissiveMap = m.map;
+        // export UVs are in meters, so repeat = 1 / tile size
+        m = floorMat(fl.preset, { ...fl, w: 1, d: 1 });
+        if (m.map) m.map.needsUpdate = true;
       }
       const mesh = new THREE.Mesh(g, m);
       mesh.position.fromArray(fl.pos);
@@ -4059,12 +4150,16 @@ function attachFloorGizmo() {
     transform.detach();
     return;
   }
+  if (view.mode === 'scale') {
+    transform.detach(); // the Tinkercad-style box handles floors too
+    return;
+  }
   transform.attach(r.mesh);
   transform.setSpace('local');
   if (view.mode === 'rotate') {
     transform.showX = false;
     transform.showZ = false;
-  } else if (view.mode === 'scale') transform.showY = false;
+  }
 }
 
 function selectFloor(id) {
@@ -4138,7 +4233,11 @@ function floorInspectorHTML() {
 <h2>${esc(f.name)}</h2>
 ${bad ? '<p class="warn">This floor overlaps another one.</p>' : ''}
 <div class="field"><input type="text" data-fl="name" maxlength="60" value="${esc(f.name)}" aria-label="Floor name" spellcheck="false"></div>
-<div class="field"><span class="lbl">Flooring</span><select data-fl="preset" aria-label="Flooring">${opts}</select></div>
+<div class="field"><span class="lbl">Flooring</span><select data-fl="preset" aria-label="Flooring" ${f.tex ? 'disabled' : ''}>${opts}</select></div>
+<div class="field"><span class="lbl">Custom texture</span>
+  <div class="inline"><button type="button" data-fact="tex">${f.tex ? 'Change image…' : 'Image…'}</button>${f.tex ? '<button type="button" data-fact="tex-clear">Use preset</button>' : ''}</div></div>
+${f.tex ? `<label class="sl"><span class="lb">Tile size (m)</span><output id="out-ftex">${(f.texSize || 1).toFixed(2)}</output>
+<input type="range" data-fltex="1" min="0.1" max="8" step="0.1" value="${f.texSize || 1}"></label>` : ''}
 <div class="xrow"><span>Size</span>${num('w', f.w, state.floor.grid, 'Width')}${num('d', f.d, state.floor.grid, 'Depth')}<span class="sub">m</span></div>
 <div class="xrow"><span>Move</span>${num('x', f.pos[0], state.floor.grid, 'X')}${num('y', f.pos[1], 0.05, 'Height')}${num('z', f.pos[2], state.floor.grid, 'Z')}</div>
 <div class="xrow"><span>Turn°</span>${num('rotY', f.rotY, 15, 'Rotation')}</div>
@@ -4155,8 +4254,22 @@ function updateFloorFields(f) {
   if (row) row.textContent = `${f.w}×${f.d} m`;
 }
 
+el.inspector.addEventListener('input', (e) => {
+  const t = e.target;
+  if (!t.dataset || !t.dataset.fltex) return;
+  const fl = floorById(view.floorSel);
+  if (!fl) return;
+  fl.texSize = parseFloat(t.value);
+  const out = $('#out-ftex');
+  if (out) out.textContent = fl.texSize.toFixed(2);
+  syncFloors();
+});
 el.inspector.addEventListener('change', (e) => {
   const t = e.target;
+  if (t.dataset && t.dataset.fltex) {
+    commit();
+    return;
+  }
   if (!t.dataset || !t.dataset.fl) return;
   const f = floorById(view.floorSel);
   if (!f) return;
@@ -4187,6 +4300,21 @@ el.inspector.addEventListener('click', (e) => {
   const b = e.target.closest('[data-fact]');
   if (!b) return;
   const a = b.dataset.fact;
+  if (a === 'tex') {
+    floorTexTarget = view.floorSel;
+    el.fileTex.click();
+    return;
+  }
+  if (a === 'tex-clear') {
+    const fl = floorById(view.floorSel);
+    if (fl) {
+      delete fl.tex;
+      syncFloors();
+      commit();
+      renderInspector();
+    }
+    return;
+  }
   if (a === 'add') addFloor();
   else if (a === 'done') setFloorMode(false);
   else if (a === 'dup' && floorById(view.floorSel)) addFloor(floorById(view.floorSel));
