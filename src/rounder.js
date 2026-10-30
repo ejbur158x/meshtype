@@ -436,6 +436,88 @@ function signedVolume(pos, idx) {
   return vol / 6;
 }
 
+/* ------------------------------- mesh post ------------------------------- */
+
+function adjacency(nVert, idx) {
+  const deg = new Uint32Array(nVert + 1);
+  for (let f = 0; f < idx.length; f += 3) {
+    for (let e = 0; e < 3; e++) {
+      deg[idx[f + e] + 1]++;
+      deg[idx[f + ((e + 1) % 3)] + 1]++;
+    }
+  }
+  for (let i = 0; i < nVert; i++) deg[i + 1] += deg[i];
+  const fill = deg.slice(0, nVert);
+  const nb = new Uint32Array(deg[nVert]);
+  for (let f = 0; f < idx.length; f += 3) {
+    for (let e = 0; e < 3; e++) {
+      const a = idx[f + e];
+      const b = idx[f + ((e + 1) % 3)];
+      nb[fill[a]++] = b;
+      nb[fill[b]++] = a;
+    }
+  }
+  return { start: deg, nb };
+}
+
+/** Taubin lambda/mu smoothing: removes high-frequency bumps without shrinking the shape. */
+function taubin(pos, idx, passes) {
+  const n = pos.length / 3;
+  const { start, nb } = adjacency(n, idx);
+  const tmp = new Float32Array(pos.length);
+  const step = (k) => {
+    for (let i = 0; i < n; i++) {
+      const s0 = start[i];
+      const s1 = start[i + 1];
+      if (s1 === s0) {
+        tmp[i * 3] = pos[i * 3]; tmp[i * 3 + 1] = pos[i * 3 + 1]; tmp[i * 3 + 2] = pos[i * 3 + 2];
+        continue;
+      }
+      let x = 0, y = 0, z = 0;
+      for (let q = s0; q < s1; q++) {
+        const j = nb[q] * 3;
+        x += pos[j]; y += pos[j + 1]; z += pos[j + 2];
+      }
+      const inv = 1 / (s1 - s0);
+      tmp[i * 3] = pos[i * 3] + k * (x * inv - pos[i * 3]);
+      tmp[i * 3 + 1] = pos[i * 3 + 1] + k * (y * inv - pos[i * 3 + 1]);
+      tmp[i * 3 + 2] = pos[i * 3 + 2] + k * (z * inv - pos[i * 3 + 2]);
+    }
+    pos.set(tmp);
+  };
+  for (let p = 0; p < passes; p++) {
+    step(0.5);
+    step(-0.53);
+  }
+}
+
+function meshNormals(pos, idx, out) {
+  out.fill(0);
+  for (let f = 0; f < idx.length; f += 3) {
+    const a = idx[f] * 3, b = idx[f + 1] * 3, c = idx[f + 2] * 3;
+    const ux = pos[b] - pos[a], uy = pos[b + 1] - pos[a + 1], uz = pos[b + 2] - pos[a + 2];
+    const vx = pos[c] - pos[a], vy = pos[c + 1] - pos[a + 1], vz = pos[c + 2] - pos[a + 2];
+    const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    for (const v of [a, b, c]) { out[v] += nx; out[v + 1] += ny; out[v + 2] += nz; }
+  }
+  for (let i = 0; i < out.length; i += 3) {
+    const l = Math.hypot(out[i], out[i + 1], out[i + 2]) || 1;
+    out[i] /= l; out[i + 1] /= l; out[i + 2] /= l;
+  }
+}
+
+/** Box-projected UVs in world units (1 UV = 1 unit), so textures tile evenly. */
+export function boxUVs(pos, nor) {
+  const uv = new Float32Array((pos.length / 3) * 2);
+  for (let i = 0, j = 0; i < pos.length; i += 3, j += 2) {
+    const ax = Math.abs(nor[i]), ay = Math.abs(nor[i + 1]), az = Math.abs(nor[i + 2]);
+    if (ax >= ay && ax >= az) { uv[j] = pos[i + 2] * Math.sign(nor[i] || 1); uv[j + 1] = pos[i + 1]; }
+    else if (ay >= az) { uv[j] = pos[i]; uv[j + 1] = pos[i + 2] * -Math.sign(nor[i + 1] || 1); }
+    else { uv[j] = pos[i] * -Math.sign(nor[i + 2] || 1); uv[j + 1] = pos[i + 1]; }
+  }
+  return uv;
+}
+
 /* ---------------------------------- main ---------------------------------- */
 
 /**
@@ -454,6 +536,8 @@ export function roundMesh(opts) {
   const inner = Math.max(0, +opts.inner || 0);
   const resolution = Math.max(24, Math.min(256, opts.resolution || 96));
   const maxCells = opts.maxCells || 5.5e6;
+  const sand = Math.max(0, Math.min(10, +opts.sand || 0));
+  const report = typeof opts.onProgress === 'function' ? opts.onProgress : () => {};
   if (!(outer > 0 || inner > 0)) return null;
   const nTri = Math.floor(positions.length / 9);
   if (nTri < 4) return null;
@@ -463,7 +547,9 @@ export function roundMesh(opts) {
   const { nx, ny, nz, h, W } = grid;
   const N = nx * ny * nz;
 
+  report(0.05);
   const { best, triOf } = distancePass(positions, grid, nTri);
+  report(0.3);
   const votes = new Uint8Array(N);
   for (let axis = 0; axis < 3; axis++) parityVotes(positions, grid, nTri, axis, votes);
 
@@ -477,8 +563,10 @@ export function roundMesh(opts) {
   }
   if (insideBefore === 0) return null;
 
+  report(0.45);
   let H = F;
   if (outer > 0) H = openField(H, outer, grid);
+  report(0.6);
   if (inner > 0) {
     const neg = new Float32Array(N);
     for (let id = 0; id < N; id++) neg[id] = -H[id];
@@ -487,6 +575,7 @@ export function roundMesh(opts) {
     for (let id = 0; id < N; id++) H[id] = -opened[id];
   }
 
+  report(0.72);
   smoothField(H, grid);
 
   let insideAfter = 0;
@@ -494,6 +583,7 @@ export function roundMesh(opts) {
   if (insideAfter === 0) return { empty: true, stats: { cells: [nx, ny, nz], h, volumeRatio: 0 } };
 
   const { verts, idx } = surfaceNets(H, grid);
+  report(0.82);
   if (idx.length === 0) return null;
   if (signedVolume(verts, idx) < 0) {
     for (let f = 0; f < idx.length; f += 3) {
@@ -532,6 +622,15 @@ export function roundMesh(opts) {
     normals[q * 3 + 1] = gy / l;
     normals[q * 3 + 2] = gz / l;
   }
+
+  // sander: Taubin smoothing (shrink-free) to remove the faint ripples that
+  // the source mesh facets and the voxel grid leave on curved surfaces
+  if (sand > 0 && idx.length) {
+    taubin(verts, idx, Math.round(sand * 4));
+    meshNormals(verts, idx, normals);
+  }
+  report(0.95);
+  const uvs = boxUVs(verts, normals);
 
   // source material per vertex (nearest source triangle in the voxel neighbourhood)
   const vertMat = new Uint16Array(nVert);
@@ -587,6 +686,7 @@ export function roundMesh(opts) {
   return {
     positions: verts,
     normals,
+    uvs,
     index: sorted,
     groups,
     stats: {

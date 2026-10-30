@@ -9,7 +9,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<link rel="stylesheet" href="style.css?v=0.2.1">
+<link rel="stylesheet" href="style.css?v=0.2.2">
 <script type="importmap">
 {
   "imports": {
@@ -63,7 +63,7 @@
   <header class="titlebar">
     <span class="logo" aria-hidden="true"></span>
     <span class="word">Meshtype</span>
-    <span class="ver">v0.2.1</span>
+    <span class="ver">v0.2.2</span>
     <input id="project-name" class="proj" type="text" value="untitled" maxlength="60" aria-label="Project name" spellcheck="false">
     <span class="spacer"></span>
     <button id="btn-install" type="button" hidden title="Install Meshtype as an app">Install app</button>
@@ -78,7 +78,6 @@
     <div class="grp">
       <button id="btn-open" type="button" title="Open a .meshtype.json project">Open</button>
       <button id="btn-save" type="button" title="Save project as .meshtype.json">Save</button>
-      <button id="btn-svg" type="button" title="Import an SVG and extrude it">Import SVG</button>
     </div>
     <span class="spacer"></span>
     <label class="chk" title="Export plain white geometry and skip the Aero materials"><input id="chk-strip" type="checkbox"> Geometry only</label>
@@ -89,6 +88,7 @@
     <input id="file-open" type="file" accept=".json,application/json" hidden>
     <input id="file-svg" type="file" accept=".svg,image/svg+xml" hidden>
     <input id="file-sky" type="file" accept="image/*" hidden>
+    <input id="file-tex" type="file" accept="image/*" hidden>
   </div>
 
   <main class="app">
@@ -100,6 +100,7 @@
         <button type="button" data-add="disc">Disc</button>
         <button type="button" data-add="orb">Orb</button>
         <button type="button" data-add="pill">Pill</button>
+        <button id="btn-svg" type="button" title="Import an SVG file and extrude it">SVG</button>
       </div>
 
       <h2>Combine</h2>
@@ -175,12 +176,13 @@
   <footer class="status">
     <span id="hint">WASD fly · Q down · E up · Shift fine · Ctrl fast · right-click for the menu</span>
     <span class="spacer"></span>
+    <div id="progress" class="pbar" hidden role="progressbar" aria-label="Task progress"><div class="pfill"></div><span class="plabel"></span></div>
     <span id="stats"></span>
   </footer>
 </div>
 
 <div id="ctx" class="ctx" role="menu" hidden></div>
 
-<script type="module" src="src/main.js?v=0.2.1"></script>
+<script type="module" src="src/main.js?v=0.2.2"></script>
 </body>
 </html>

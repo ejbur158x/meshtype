@@ -1,4 +1,4 @@
-// Meshtype v0.2.1
+// Meshtype v0.2.2
 // A small browser mesh editor: squircle primitives, union / negate / split,
 // edge rounding, SVG extrusion, GLB export.
 
@@ -11,9 +11,9 @@ import { Brush, Evaluator, ADDITION, SUBTRACTION, INTERSECTION } from 'three-bvh
 import { SHAPES, makeGeometry } from './shapes.js';
 import { MATERIALS, applyMaterial, makeAeroEnvironment } from './materials.js';
 import { inspectSvg, makeSvgGeometry } from './svg.js';
-import { roundMesh } from './rounder.js';
+import { roundMesh, boxUVs } from './rounder.js';
 
-const VERSION = '0.2.1';
+const VERSION = '0.2.2';
 const STORE_KEY = 'meshtype.autosave';
 
 const PRESETS = {
@@ -78,6 +78,8 @@ const el = {
   fileOpen: $('#file-open'),
   fileSvg: $('#file-svg'),
   fileSky: $('#file-sky'),
+  fileTex: $('#file-tex'),
+  progress: $('#progress'),
   strip: $('#chk-strip'),
   ctx: $('#ctx'),
   union: $('#btn-union'),
@@ -182,7 +184,8 @@ function sanitizeRound(r) {
   const outer = clamp(Number(r.outer) || 0, 0, 1);
   const inner = clamp(Number(r.inner) || 0, 0, 1);
   if (!(outer > 0 || inner > 0)) return undefined;
-  return { outer, inner, res: clamp(Math.round(Number(r.res) || 64), 32, 220) };
+  const sand = r.sand === undefined ? 3 : clamp(Number(r.sand) || 0, 0, 10);
+  return { outer, inner, res: clamp(Math.round(Number(r.res) || 64), 32, 220), sand };
 }
 
 function sanitizePart(raw) {
@@ -218,6 +221,10 @@ function sanitizePart(raw) {
     visible: raw.visible !== false,
   };
   if (type === 'svg') o.asset = String(raw.asset || '');
+  if (typeof raw.tex === 'string' && raw.tex) {
+    o.tex = raw.tex;
+    o.texSize = clamp(Number(raw.texSize) || 0.5, 0.02, 10);
+  }
   const rd = sanitizeRound(raw.round);
   if (rd) o.round = rd;
   return o;
@@ -406,6 +413,63 @@ function geometryFor(o) {
   return makeGeometry(o.type, o.params);
 }
 
+function hiGeometryFor(o) {
+  // denser source for the rounder, so facets don't show up as ripples
+  const params = { ...o.params, detail: 6 };
+  if (o.type === 'svg') return makeSvgGeometry(state.assets[o.asset], params);
+  return makeGeometry(o.type, params);
+}
+
+function setBoxUVs(g) {
+  const pos = g.attributes.position;
+  if (!pos || !pos.count) return;
+  if (!g.attributes.normal) g.computeVertexNormals();
+  g.setAttribute('uv', new THREE.BufferAttribute(boxUVs(pos.array, g.attributes.normal.array), 2));
+}
+
+const texBase = new Map(); // asset id -> loaded texture (shared image)
+function baseTexture(assetId) {
+  let t = texBase.get(assetId);
+  if (t) return t;
+  const url = state.assets[assetId];
+  if (!url) return null;
+  t = new THREE.TextureLoader().load(url);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  texBase.set(assetId, t);
+  return t;
+}
+
+/** Material preset + tint + optional image texture. Cheap when nothing changed. */
+function applyLook(o, force = false) {
+  const r = ensureRT(o);
+  const want = o.tex && state.assets[o.tex] ? o.tex : null;
+  const key = JSON.stringify([o.mat, o.color, want, o.texSize]);
+  if (!force && r.lookKey === key) return;
+  r.lookKey = key;
+  applyMaterial(r.material, o.mat, o.color);
+  if (want) {
+    if (!r.tex || r.texAsset !== want) {
+      if (r.tex) r.tex.dispose();
+      const b = baseTexture(want);
+      r.tex = b ? b.clone() : null;
+      r.texAsset = want;
+    }
+    if (r.tex) {
+      const k = 1 / (o.texSize || 0.5);
+      r.tex.repeat.set(k, k);
+      r.tex.needsUpdate = true;
+    }
+    r.material.map = r.tex;
+  } else {
+    if (r.tex) r.tex.dispose();
+    r.tex = null;
+    r.texAsset = null;
+    r.material.map = null;
+  }
+  r.material.needsUpdate = true;
+}
+
 function ensureRT(o) {
   let r = rt.get(o.id);
   if (r) return r;
@@ -419,7 +483,7 @@ function ensureRT(o) {
   w.renderOrder = 10;
   proxy.add(part, w, f);
   partsGroup.add(proxy);
-  r = { proxy, part, wire: w, fill: f, geo: null, key: '', material };
+  r = { proxy, part, wire: w, fill: f, geo: null, key: '', material, hiGeo: null, hiKey: '', tex: null, texAsset: null, lookKey: '' };
   rt.set(o.id, r);
   return r;
 }
@@ -431,6 +495,7 @@ function syncRT(o) {
   if (r.key !== key) {
     const old = r.geo;
     r.geo = geometryFor(o);
+    setBoxUVs(r.geo);
     r.key = key;
     r.proxy.geometry = r.part.geometry = r.wire.geometry = r.fill.geometry = r.geo;
     if (old) old.dispose();
@@ -439,42 +504,97 @@ function syncRT(o) {
   r.proxy.rotation.set(deg2rad(o.rot[0]), deg2rad(o.rot[1]), deg2rad(o.rot[2]), 'XYZ');
   r.proxy.scale.fromArray(o.scl);
   r.proxy.visible = o.visible;
+  applyLook(o);
 }
 
-function selectedAncestorSet() {
+/** Leaves whose own cages should show. A selected top-level union shows as one baked shape instead. */
+function directLeafSel() {
   const set = new Set();
-  for (const id of liveSel()) for (const d of descendantIds(id)) set.add(d);
+  for (const id of liveSel()) {
+    const n = node(id);
+    const u = units.get(id);
+    if (n && n.parent == null && u && u.mesh) continue;
+    for (const d of descendantIds(id)) set.add(d);
+  }
   return set;
 }
 
 /** Wireframe cages + fills: blue = selected, red = cutters. */
 function syncCages() {
-  const selSet = selectedAncestorSet();
+  const direct = directLeafSel();
   for (const o of state.nodes) {
     if (o.kind !== 'part') continue;
     const r = rt.get(o.id);
     if (!r) continue;
     const top = topOf(o.id);
-    const selected = selSet.has(o.id);
-    let showWire;
-    let showFill;
-    let cutter;
-    if (top && top.neg) {
+    const sel = direct.has(o.id);
+    let cutter = false;
+    let showWire = false;
+    let showFill = false;
+    if (top && top.neg && top.kind === 'part') {
+      // a loose cutter part
       cutter = true;
       showWire = true;
       showFill = true;
-    } else if (o.neg) {
+    } else if (top && top.neg) {
+      // inside a negated union: the union's baked red ghost shows instead
       cutter = true;
-      showWire = selected || view.cages;
-      showFill = selected || view.cages;
+      showWire = showFill = sel || view.cages;
+    } else if (o.neg) {
+      // a cutter baked into a union: hidden unless picked directly
+      cutter = true;
+      showWire = showFill = sel || view.cages;
     } else {
-      cutter = false;
-      showWire = selected || view.cages;
-      showFill = false;
+      showWire = sel || view.cages;
     }
     r.wire.material = cutter ? ghost.wireNeg : ghost.wireSel;
     r.wire.visible = showWire;
     r.fill.visible = showFill;
+  }
+  decorateUnits();
+}
+
+const unitSelMat = new THREE.MeshBasicMaterial({
+  color: 0x3aa0ff, transparent: true, opacity: 0.16, depthWrite: false,
+  polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
+});
+const unitNegMat = new THREE.MeshBasicMaterial({ color: 0xff4d5e, transparent: true, opacity: 0.2, depthWrite: false, side: THREE.DoubleSide });
+const edgeSel = new THREE.LineBasicMaterial({ color: 0x0a7fe0, transparent: true, opacity: 0.9, depthTest: false });
+const edgeNeg = new THREE.LineBasicMaterial({ color: 0xe0364a, transparent: true, opacity: 0.9, depthTest: false });
+
+/** Selection tint + crease outline on baked unions, and the red ghost of a negated union. */
+function decorateUnits() {
+  const sel = new Set(liveSel());
+  for (const u of units.values()) {
+    const n = node(u.id);
+    const shown = !!(u.mesh && u.mesh.visible && n);
+    const picked = shown && sel.has(u.id);
+    const neg = shown && n.neg;
+    if (shown && !u.overlay) {
+      u.overlay = new THREE.Mesh(u.mesh.geometry, unitSelMat);
+      u.overlay.frustumCulled = false;
+      u.overlay.renderOrder = 3;
+      resultGroup.add(u.overlay);
+    }
+    if (u.overlay) {
+      if (shown) u.overlay.geometry = u.mesh.geometry;
+      u.overlay.visible = picked && !neg;
+    }
+    if (picked || neg) {
+      if (!u.edges) {
+        u.edges = new THREE.LineSegments(new THREE.BufferGeometry(), edgeSel);
+        u.edges.frustumCulled = false;
+        u.edges.renderOrder = 11;
+        resultGroup.add(u.edges);
+      }
+      if (u.edgesFor !== u.mesh.geometry) {
+        u.edges.geometry.dispose();
+        u.edges.geometry = new THREE.EdgesGeometry(u.mesh.geometry, 40);
+        u.edgesFor = u.mesh.geometry;
+      }
+      u.edges.material = neg ? edgeNeg : edgeSel;
+      u.edges.visible = true;
+    } else if (u.edges) u.edges.visible = false;
   }
 }
 
@@ -494,7 +614,12 @@ function syncVisibility() {
       r.part.visible = !(u && u.mesh);
     }
   }
-  for (const u of units.values()) if (u.mesh) u.mesh.visible = view.result;
+  for (const u of units.values()) {
+    if (!u.mesh) continue;
+    const n = node(u.id);
+    u.mesh.visible = n && n.neg ? true : view.result;
+  }
+  decorateUnits();
 }
 
 function syncAll() {
@@ -509,9 +634,13 @@ function clearRT() {
   for (const r of rt.values()) {
     partsGroup.remove(r.proxy);
     if (r.geo) r.geo.dispose();
+    if (r.hiGeo) r.hiGeo.dispose();
+    if (r.tex) r.tex.dispose();
     r.material.dispose();
   }
   rt.clear();
+  for (const t of texBase.values()) t.dispose();
+  texBase.clear();
   for (const u of [...units.values()]) disposeUnit(u);
   units.clear();
 }
@@ -653,24 +782,34 @@ function sigOf(id) {
   return JSON.stringify([n.mode, n.neg ? 1 : 0, n.visible ? 1 : 0, kidsOf(id).map((k) => sigOf(k.id))]);
 }
 
-function partBrush(o) {
+function partBrush(o, hi = false) {
   const r = rt.get(o.id);
   if (!r || !r.geo || !r.geo.attributes.position || r.geo.attributes.position.count === 0) return null;
+  let src = r.geo;
+  if (hi) {
+    if (r.hiKey !== r.key || !r.hiGeo) {
+      if (r.hiGeo) r.hiGeo.dispose();
+      r.hiGeo = hiGeometryFor(o);
+      setBoxUVs(r.hiGeo);
+      r.hiKey = r.key;
+    }
+    src = r.hiGeo;
+  }
   r.proxy.updateMatrix();
-  const g = r.geo.clone();
+  const g = src.clone();
   g.applyMatrix4(r.proxy.matrix);
   return new Brush(g, r.material);
 }
 
 /** Evaluate a node into a world-space CSG brush. The caller owns the result. */
-function evalNode(id) {
+function evalNode(id, hi = false) {
   const n = node(id);
   if (!n || !n.visible) return null;
-  if (n.kind === 'part') return partBrush(n);
+  if (n.kind === 'part') return partBrush(n, hi);
   const solids = [];
   const cutters = [];
   for (const k of kidsOf(id)) {
-    const b = evalNode(k.id);
+    const b = evalNode(k.id, hi);
     if (!b) continue;
     (k.neg && n.mode !== 'int' ? cutters : solids).push(b);
   }
@@ -701,6 +840,12 @@ function disposeUnit(u) {
     resultGroup.remove(u.mesh);
     u.mesh = null;
   }
+  if (u.overlay) resultGroup.remove(u.overlay);
+  if (u.edges) {
+    resultGroup.remove(u.edges);
+    u.edges.geometry.dispose();
+  }
+  u.overlay = u.edges = u.edgesFor = null;
   disposeBrush(u.brush);
   u.brush = null;
   if (u.rounded) {
@@ -731,16 +876,18 @@ function setUnitMesh(u, geo, material) {
 function presentUnit(u) {
   const n = node(u.id);
   if (!n) return;
-  const want = roundActive(n);
+  const want = roundActive(n) && !n.neg;
   const fresh = u.rounded && u.rounded.srcSig === u.sig;
-  if (want && fresh) {
+  if (n.neg) {
+    setUnitMesh(u, u.brush ? u.brush.geometry : null, unitNegMat);
+  } else if (want && fresh) {
     setUnitMesh(u, u.rounded.geo, u.rounded.mats);
   } else if (isGroup(n)) {
     setUnitMesh(u, u.brush ? u.brush.geometry : null, u.brush ? u.brush.material : null);
   } else {
     setUnitMesh(u, null);
   }
-  if (u.mesh) u.mesh.visible = view.result;
+  if (u.mesh) u.mesh.visible = n.neg ? true : view.result;
 }
 
 function solve() {
@@ -749,7 +896,7 @@ function solve() {
   const tops = state.nodes.filter((n) => n.parent == null);
   const alive = new Set();
   for (const n of tops) {
-    if (n.neg || !n.visible) continue;
+    if (!n.visible || (n.neg && !isGroup(n))) continue;
     alive.add(n.id);
     const sig = sigOf(n.id);
     let u = units.get(n.id);
@@ -774,7 +921,7 @@ function solve() {
         }
       }
     }
-    if (roundActive(n)) scheduleRound(u, n);
+    if (roundActive(n) && !n.neg) scheduleRound(u, n);
     else if (u.rounded) {
       u.rounded.geo.dispose();
       u.rounded = null;
@@ -788,6 +935,7 @@ function solve() {
     }
   }
   syncVisibility();
+  syncCages();
   resultMs = performance.now() - lastSolve;
   tallyStats();
 }
@@ -805,7 +953,10 @@ function tallyStats() {
     if (u && u.mesh) continue;
     if (r && r.geo && r.geo.attributes.position) t += triCount(r.geo);
   }
-  for (const u of units.values()) if (u.mesh) t += triCount(u.mesh.geometry);
+  for (const u of units.values()) {
+    const n = node(u.id);
+    if (u.mesh && n && !n.neg) t += triCount(u.mesh.geometry);
+  }
   resultTris = t;
   updateStats();
 }
@@ -835,7 +986,10 @@ function getWorker() {
   if (!worker) {
     try {
       worker = new Worker(new URL('./round-worker.js', import.meta.url), { type: 'module' });
-      worker.onmessage = (e) => finishJob(e.data.job, e.data.result, e.data.error);
+      worker.onmessage = (e) => {
+        if (e.data.progress !== undefined) setProgress(e.data.job, e.data.progress);
+        else finishJob(e.data.job, e.data.result, e.data.error);
+      };
       worker.onerror = () => {
         workerBroken = true;
         worker = null;
@@ -866,17 +1020,27 @@ function unitSoup(u) {
   let geo;
   let mats;
   let matrix = null;
+  let tmp = null;
   if (isGroup(n)) {
-    if (!u.brush) return null;
-    geo = u.brush.geometry;
-    mats = Array.isArray(u.brush.material) ? u.brush.material : [u.brush.material];
+    try {
+      tmp = evalNode(n.id, true);
+    } catch (err) {
+      tmp = null;
+    }
+    const b = tmp || u.brush;
+    if (!b) return null;
+    geo = b.geometry;
+    mats = Array.isArray(b.material) ? b.material : [b.material];
   } else {
     const r = rt.get(n.id);
     if (!r || !r.geo || !r.geo.attributes.position) return null;
-    geo = r.geo;
+    tmp = partBrush(n, true);
+    geo = tmp ? tmp.geometry : r.geo;
     mats = [r.material];
-    r.proxy.updateMatrix();
-    matrix = r.proxy.matrix;
+    if (!tmp) {
+      r.proxy.updateMatrix();
+      matrix = r.proxy.matrix;
+    }
   }
   const pos = geo.attributes.position;
   const index = geo.index;
@@ -901,6 +1065,7 @@ function unitSoup(u) {
       triMat[t] = Math.min(groups[gi].materialIndex || 0, mats.length - 1);
     }
   }
+  disposeBrush(tmp);
   return { positions, triMat, mats };
 }
 
@@ -929,10 +1094,12 @@ function startRound(u, wanted) {
     outer: n.round.outer,
     inner: n.round.inner,
     resolution: n.round.res,
+    sand: n.round.sand,
   };
   u.job = { id: jobId, wanted };
   jobs.set(jobId, { unitId: u.id, srcSig: u.sig, wanted, opts, mats: soup.mats });
   const w = getWorker();
+  setProgress(jobId, 0.02);
   if (w) w.postMessage({ job: jobId, opts }, [opts.positions.buffer, opts.triMat.buffer]);
   else runJobHere(jobId, jobs.get(jobId));
 }
@@ -954,6 +1121,7 @@ function finishJob(jobId, result, error) {
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.BufferAttribute(result.positions, 3));
       g.setAttribute('normal', new THREE.BufferAttribute(result.normals, 3));
+      if (result.uvs) g.setAttribute('uv', new THREE.BufferAttribute(result.uvs, 2));
       g.setIndex(new THREE.BufferAttribute(result.index, 1));
       for (const gr of result.groups) g.addGroup(gr.start, gr.count, gr.materialIndex);
       g.computeBoundingSphere();
@@ -966,11 +1134,30 @@ function finishJob(jobId, result, error) {
       if (result.stats && result.stats.warnSmall) toast('Radius is under 1.5 voxels. Raise Quality for a cleaner round.');
       presentUnit(u);
       syncVisibility();
+      syncCages();
       tallyStats();
     }
   }
+  if (!jobs.size) setProgress(null);
   updateStats();
   refreshRoundStatus();
+}
+
+/* Win7-style progress bar in the status bar */
+let progressJob = 0;
+function setProgress(job, p) {
+  const bar = el.progress;
+  if (!bar) return;
+  if (job === null || p === null || p === undefined) {
+    bar.hidden = true;
+    progressJob = 0;
+    return;
+  }
+  if (job < progressJob) return; // only follow the newest job
+  progressJob = job;
+  bar.hidden = false;
+  bar.querySelector('.pfill').style.width = `${Math.round(clamp(p, 0.02, 1) * 100)}%`;
+  bar.querySelector('.plabel').textContent = `Rounding ${Math.round(p * 100)}%`;
 }
 
 function refreshRoundStatus() {
@@ -996,7 +1183,17 @@ function snapshot() {
   return JSON.stringify({ ...projectData(), sel: state.sel, active: state.active });
 }
 
+function gcAssets() {
+  const used = new Set();
+  for (const n of state.nodes) {
+    if (n.asset) used.add(n.asset);
+    if (n.tex) used.add(n.tex);
+  }
+  for (const k of Object.keys(state.assets)) if (!used.has(k)) delete state.assets[k];
+}
+
 function commit() {
+  gcAssets();
   const s = snapshot();
   if (hist.stack[hist.i] === s) return;
   hist.stack = hist.stack.slice(0, hist.i + 1);
@@ -1471,7 +1668,7 @@ function arrangeHTML() {
 }
 
 function roundHTML(n) {
-  const r = n.round || { outer: 0, inner: 0, res: 64 };
+  const r = n.round || { outer: 0, inner: 0, res: 64, sand: 3 };
   const top = n.parent == null;
   if (!top) return '<h2>Round edges</h2><p class="tip">Rounding is applied to a finished top-level part or union. Select the union.</p>';
   if (n.neg) return '<h2>Round edges</h2><p class="tip">Cutters are not rounded. Round the union they are part of.</p>';
@@ -1482,7 +1679,30 @@ function roundHTML(n) {
 <label class="sl"><span class="lb">Inner edges (concave)</span><output id="out-inner">${r.inner.toFixed(3)}</output>
 <input type="range" data-round="inner" min="0" max="0.4" step="0.005" value="${r.inner}"></label>
 <div class="field"><span class="lbl">Quality</span><select id="f-rq" aria-label="Rounding quality">${q}</select></div>
+<label class="sl"><span class="lb">Sander (smooths ripples)</span><output id="out-sand">${(r.sand ?? 3).toFixed(0)}</output>
+<input type="range" data-round="sand" min="0" max="10" step="1" value="${r.sand ?? 3}"></label>
 <p class="tip">Rebuilds the shape as a smooth mesh. Inner edges are where shapes meet or a cut ends.</p>`;
+}
+
+/** Material, tint and texture. For a union this edits every part inside it. */
+function lookHTML(leaves) {
+  if (!leaves.length) return '';
+  const first = leaves[0];
+  const same = (k) => leaves.every((o) => o[k] === first[k]);
+  const mixed = !same('mat');
+  const matOptions =
+    (mixed ? '<option value="" selected>Mixed</option>' : '') +
+    Object.entries(MATERIALS)
+      .map(([k, m]) => `<option value="${k}" ${!mixed && first.mat === k ? 'selected' : ''}>${m.label}</option>`)
+      .join('');
+  const anyTex = leaves.some((o) => o.tex);
+  const size = (leaves.find((o) => o.tex) || first).texSize || 0.5;
+  return `<h2>Material${leaves.length > 1 ? ` <span class="sub">(all ${leaves.length} parts)</span>` : ''}</h2>
+<div class="matrow"><select id="f-mat" aria-label="Material">${matOptions}</select><input id="f-color" type="color" value="${first.color}" aria-label="Tint color"></div>
+<div class="field texrow"><span class="lbl">Texture</span>
+  <div class="inline"><button type="button" data-act="tex">${anyTex ? 'Change image…' : 'Image…'}</button>${anyTex ? '<button type="button" data-act="tex-clear">Remove</button>' : ''}</div></div>
+${anyTex ? `<label class="sl"><span class="lb">Tile size</span><output id="out-texsize">${size.toFixed(2)}</output>
+<input type="range" data-texsize="1" min="0.05" max="4" step="0.05" value="${size}"></label>` : ''}`;
 }
 
 function renderInspector() {
@@ -1513,6 +1733,7 @@ ${arrangeHTML()}
     el.inspector.innerHTML = `${head}
 <p class="hint">${n.mode === 'int' ? 'Keeps only where its parts overlap.' : `${ks.length - cut} solid${ks.length - cut === 1 ? '' : 's'} blended${cut ? `, ${cut} cutter${cut === 1 ? '' : 's'} subtracted` : ''}.`}
 Click a part in the list to edit it, or SPLIT to take it apart.</p>
+${lookHTML(leavesOf(n.id))}
 ${n.parent == null ? roundHTML(n) : ''}
 ${arrangeHTML()}
 <div class="acts"><button type="button" data-act="split">Split</button><button type="button" data-act="dup">Duplicate</button><button type="button" data-act="del" class="danger">Delete</button></div>`;
@@ -1520,16 +1741,12 @@ ${arrangeHTML()}
   }
   const sliders = SHAPE_UI[n.type].map((s) => sliderHTML(n, s)).join('');
   const tip = n.type === 'squircle' ? '<p class="tip">n = 2 is round, n = 4 is a classic squircle, higher gets boxier.</p>' : '';
-  const matOptions = Object.entries(MATERIALS)
-    .map(([k, m]) => `<option value="${k}" ${n.mat === k ? 'selected' : ''}>${m.label}</option>`)
-    .join('');
   el.inspector.innerHTML = `${head}
 <h2>Shape</h2>
 ${sliders}${tip}
 <h2>Transform</h2>
 ${xformRow(n, 'Move', 'pos', 0.05)}${xformRow(n, 'Rotate°', 'rot', 5)}${xformRow(n, 'Scale', 'scl', 0.05)}
-<h2>Material</h2>
-<div class="matrow"><select id="f-mat" aria-label="Material">${matOptions}</select><input id="f-color" type="color" value="${n.color}" aria-label="Tint color"></div>
+${lookHTML([n])}
 ${roundHTML(n)}
 ${arrangeHTML()}
 <div class="acts"><button type="button" data-act="dup">Duplicate</button><button type="button" data-act="del" class="danger">Delete</button></div>`;
@@ -1583,7 +1800,19 @@ el.inspector.addEventListener('input', (e) => {
   const n = state.sel.length === 1 ? node(state.sel[0]) : null;
   if (t.dataset.round && n) {
     const out = $(`#out-${t.dataset.round}`);
-    if (out) out.textContent = parseFloat(t.value).toFixed(3);
+    if (out) out.textContent = parseFloat(t.value).toFixed(t.dataset.round === 'sand' ? 0 : 3);
+    return;
+  }
+  if (n && (t.id === 'f-color' || t.dataset.texsize)) {
+    for (const o of leavesOf(n.id)) {
+      if (t.id === 'f-color') o.color = t.value;
+      else o.texSize = parseFloat(t.value);
+      applyLook(o);
+    }
+    if (t.dataset.texsize) {
+      const out = $('#out-texsize');
+      if (out) out.textContent = parseFloat(t.value).toFixed(2);
+    }
     return;
   }
   if (!n || n.kind !== 'part') {
@@ -1608,7 +1837,7 @@ el.inspector.addEventListener('input', (e) => {
     renderList();
   } else if (t.id === 'f-color') {
     n.color = t.value;
-    applyMaterial(rt.get(n.id).material, n.mat, n.color);
+    applyLook(n);
   }
 });
 
@@ -1631,7 +1860,7 @@ el.inspector.addEventListener('change', (e) => {
   const n = state.sel.length === 1 ? node(state.sel[0]) : null;
   if (!n) return;
   if (t.dataset.round || t.id === 'f-rq') {
-    const cur = n.round || { outer: 0, inner: 0, res: 64 };
+    const cur = n.round || { outer: 0, inner: 0, res: 64, sand: 3 };
     const next = { ...cur };
     if (t.dataset.round) next[t.dataset.round] = parseFloat(t.value);
     else next.res = parseInt(t.value, 10);
@@ -1641,7 +1870,7 @@ el.inspector.addEventListener('change', (e) => {
     afterEdit({ keepGizmo: true });
     return;
   }
-  if (t.dataset.param || t.id === 'f-name' || t.id === 'f-color') {
+  if (t.dataset.param || t.id === 'f-name' || t.id === 'f-color' || t.dataset.texsize) {
     commit();
   } else if (t.dataset.t && n.kind === 'part') {
     const key = t.dataset.t;
@@ -1655,12 +1884,14 @@ el.inspector.addEventListener('change', (e) => {
     requestSolve();
     planeDirty = true;
     commit();
-  } else if (t.id === 'f-mat' && n.kind === 'part') {
-    n.mat = t.value;
-    n.color = MATERIALS[n.mat].color;
-    applyMaterial(rt.get(n.id).material, n.mat, n.color);
+  } else if (t.id === 'f-mat' && MATERIALS[t.value]) {
+    for (const o of leavesOf(n.id)) {
+      o.mat = t.value;
+      o.color = MATERIALS[o.mat].color;
+      applyLook(o);
+    }
     const colorInput = $('#f-color');
-    if (colorInput) colorInput.value = n.color;
+    if (colorInput) colorInput.value = MATERIALS[t.value].color;
     commit();
   }
 });
@@ -1709,6 +1940,18 @@ function runAction(a) {
       f.select();
     }
   } else if (a === 'svg') el.fileSvg.click();
+  else if (a === 'tex') el.fileTex.click();
+  else if (a === 'tex-clear') {
+    const n = state.sel.length === 1 ? node(state.sel[0]) : null;
+    if (n) {
+      for (const o of leavesOf(n.id)) {
+        delete o.tex;
+        applyLook(o);
+      }
+      commit();
+      renderInspector();
+    }
+  }
   else if (a.startsWith('add:')) addObject(a.slice(4));
   else if (a.startsWith('axis:')) {
     view.align.axis = a.slice(5);
@@ -2250,6 +2493,27 @@ el.fileOpen.addEventListener('change', async () => {
   }
 });
 $('#btn-svg').addEventListener('click', () => el.fileSvg.click());
+el.fileTex.addEventListener('change', async () => {
+  const file = el.fileTex.files && el.fileTex.files[0];
+  el.fileTex.value = '';
+  const n = state.sel.length === 1 ? node(state.sel[0]) : null;
+  if (!file || !n) return;
+  try {
+    const url = await shrinkImage(file, 1024);
+    const id = `img${state.nextId++}`;
+    state.assets[id] = url;
+    for (const o of leavesOf(n.id)) {
+      o.tex = id;
+      if (!o.texSize) o.texSize = 0.5;
+      applyLook(o);
+    }
+    commit();
+    renderInspector();
+    toast('Texture applied. Set the tint to white to see the image colors as-is.');
+  } catch (err) {
+    toast('Could not load that image: ' + err.message);
+  }
+});
 el.fileSvg.addEventListener('change', async () => {
   const file = el.fileSvg.files && el.fileSvg.files[0];
   el.fileSvg.value = '';

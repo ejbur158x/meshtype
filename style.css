@@ -392,3 +392,29 @@ input[type="range"]::-moz-range-thumb { width: 9px; height: 17px; border: 1px so
   transform: var(--t); backface-visibility: hidden;
 }
 .vc-face:hover { background: linear-gradient(145deg, #fff, #8fd0ff); color: #000; }
+
+/* ---------- Win7 progress bar ---------- */
+
+.pbar {
+  position: relative; width: 190px; height: 15px; overflow: hidden;
+  border: 1px solid #8a8a8a; border-radius: 3px;
+  background: linear-gradient(#e6e6e6, #d4d4d4 50%, #c8c8c8 50%, #dcdcdc);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.7);
+}
+.pbar[hidden] { display: none; }
+.pfill {
+  position: absolute; inset: 0 auto 0 0; width: 0; overflow: hidden;
+  background: linear-gradient(#bdf5b3 0, #5ed64c 45%, #23b014 50%, #3ec82d 80%, #8ae67c 100%);
+  transition: width 0.25s ease-out;
+}
+.pfill::after {
+  content: ""; position: absolute; top: 0; bottom: 0; width: 70px; left: -80px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0));
+  animation: pswoosh 2.2s linear infinite;
+}
+@keyframes pswoosh { 0% { left: -80px; } 60%, 100% { left: 110%; } }
+.plabel {
+  position: relative; display: block; text-align: center; font-size: 10px; line-height: 13px; color: #10300c;
+  text-shadow: 0 0 3px #fff, 0 0 3px #fff;
+}
+@media (prefers-reduced-motion: reduce) { .pfill::after { animation: none; } }

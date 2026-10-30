@@ -1,6 +1,6 @@
 # Meshtype
 
-**v0.2.1.** A tiny browser mesh editor for squircles and glossy Frutiger Aero shapes. Solid and cutter parts, UNION / NEGATE / SPLIT, edge rounding, SVG extrusion, multi-select, and GLB export. No build step. Installable as an app and works offline.
+**v0.2.2.** A tiny browser mesh editor for squircles and glossy Frutiger Aero shapes. Solid and cutter parts, UNION / NEGATE / SPLIT, edge rounding, SVG extrusion, multi-select, and GLB export. No build step. Installable as an app and works offline.
 
 Made because Blender is overkill when all you need is a rounded panel with a dent in it.
 
@@ -28,7 +28,7 @@ Every shape is either a **solid** or a **cutter** (shown in red). A cutter does 
 | **SPLIT** (`X`) | Takes a union apart into its separate parts. Each part keeps its solid/cutter state. With nothing selected it splits every union. |
 | Intersect | Keeps only where the selected parts overlap. |
 
-A union is one object: click it and the gizmo moves the whole thing. Click a part in the Parts list to edit that part alone (its shape, material, position). Unions can nest. Cut faces take the material of the cutter.
+A union is one object: it bakes into a single new shape, so selecting it highlights the result, not the cutters inside. NEGATE a union to turn the whole baked shape into a cutter (shown as a red ghost) and union it with something else. The original parts are kept, so SPLIT can always take it back apart. Click it and the gizmo moves the whole thing. Click a part in the Parts list to edit that part alone (its shape, material, position). Unions can nest. Cut faces take the material of the cutter.
 
 ## Selecting
 
@@ -80,6 +80,9 @@ Select a finished solid or union and use **Round edges** in the right panel:
 - **Outer edges** rounds convex corners and edges (where a surface bends away). Intersecting shapes usually leave sharp ones.
 - **Inner edges** rounds concave corners (where two surfaces meet, or a cut ends).
 - **Quality** is the voxel resolution. Higher is smoother and slower.
+- **Sander** smooths away the faint ripples the voxel rebuild can leave on curved surfaces (default 3). The rounder also rebuilds each part at a much higher detail first, so the facets of a low-detail shape don't show up as bands.
+
+A green progress bar in the status bar shows how far along it is.
 
 It rebuilds the shape as a smooth mesh in a background worker, so the editor stays responsive. Exports use the rounded mesh. The rebuilt mesh is dense (tens of thousands of triangles), so use Low or Draft when the model is going into a game, and decimate if you need it lighter. Radius is in world units. If it is under about 1.5 voxels the result gets blocky, so raise Quality.
 
@@ -87,15 +90,17 @@ Rounding is applied to a top-level part or union. If you union a rounded part in
 
 ## SVG import
 
-**Import SVG** (or drag an `.svg` onto the viewport) extrudes it into a part. It is centered, scaled to 2 units on its longest side, and Y-up. Then use Extrude depth and Round edges to finish it.
+**SVG** in Add shape (or drag an `.svg` onto the viewport) extrudes it into a part. It is centered, scaled to 2 units on its longest side, and Y-up. Then use Extrude depth and Round edges to finish it.
 
 - Filled shapes and paths work. Strokes are ignored, so convert strokes to filled paths first.
 - Holes (even-odd or opposite winding) work.
 - Overlapping filled shapes in the same SVG can leave internal faces that confuse booleans. Merge them in your SVG editor first.
 
-## Materials
+## Materials and textures
 
-Aero glass, Gloss plastic, Bubble, Frosted glass, Chrome, Matte, Glow. Pick one, then tint it.
+Aero glass, Gloss plastic, Bubble, Frosted glass, Chrome, Matte, Glow. Pick one, then tint it. With a union selected, the material, tint and texture apply to every part in it.
+
+**Texture**: Image… loads a picture (shrunk to 1024 px) and box-projects it onto the shape. Tile size sets how big one repeat is in world units. The tint multiplies the image, so set it to white to see the image colors as-is. It is a simple box projection, so expect seams where a surface turns between directions. Textures export with the GLB.
 
 ## Export
 
@@ -122,7 +127,7 @@ src/rounder.js          edge rounder (signed distance field)
 src/round-worker.js     runs the rounder off the main thread
 src/materials.js        material presets + procedural sky
 tools/                  build-precache.mjs, make-icons.mjs
-tests/                  rounder.test.mjs, e2e.mjs, e2e-controls.mjs
+tests/                  rounder.test.mjs, e2e.mjs, e2e-controls.mjs, e2e-union.mjs
 vendor/                 three.js, three-mesh-bvh, three-bvh-csg (see vendor/README.md)
 ```
 
@@ -134,7 +139,7 @@ The service worker caches the whole app. After you edit any file, regenerate the
 node tools/build-precache.mjs
 ```
 
-## Known limits (v0.2.1)
+## Known limits (v0.2.2)
 
 - Booleans are live, so keep Detail at 2 or 3 on dense scenes.
 - Scaling a rotated part from a multi-selection gizmo can introduce shear, which Meshtype can't store. Use Scale on single parts for that.
