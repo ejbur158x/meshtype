@@ -84,10 +84,30 @@ function serve() {
 
 /* -------------------------------- main --------------------------------- */
 
-const { chromium } = await loadPlaywright();
+const LAUNCH = {
+  args: ['--use-gl=swiftshader', '--enable-webgl', '--ignore-gpu-blocklist', '--enable-unsafe-swiftshader'],
+  ...(process.env.MESHTYPE_CHROMIUM ? { executablePath: process.env.MESHTYPE_CHROMIUM } : {}),
+};
+async function launch() {
+  const { chromium } = await loadPlaywright();
+  try {
+    return await chromium.launch(LAUNCH);
+  } catch (err) {
+    // the local Playwright has no browser downloaded yet: try a global install before giving up
+    for (const dir of [process.env.PLAYWRIGHT_DIR, '/opt/npm-tools/node_modules/playwright'].filter(Boolean)) {
+      try {
+        return await createRequire(import.meta.url)(dir).chromium.launch(LAUNCH);
+      } catch (e) {
+        /* next */
+      }
+    }
+    console.error('No Chromium for Playwright yet. Run:  npx playwright install chromium\n(or set MESHTYPE_CHROMIUM to a Chrome/Chromium executable)');
+    process.exit(3);
+  }
+}
 const server = await serve();
 const base = `http://127.0.0.1:${server.address().port}/`;
-const browser = await chromium.launch({ args: ['--use-gl=swiftshader', '--enable-webgl', '--ignore-gpu-blocklist', '--enable-unsafe-swiftshader'] });
+const browser = await launch();
 const page = await (await browser.newContext({ viewport: { width: 1200, height: 800 } })).newPage();
 page.setDefaultTimeout(180000);
 const pageErrors = [];

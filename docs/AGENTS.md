@@ -11,7 +11,7 @@ npm install
 npx playwright install chromium
 ```
 
-Node 18 or newer. The CLI runs the real editor in a hidden browser, so its output is exactly what the Export button makes.
+Node 18 or newer. If Chromium can't be downloaded, point `MESHTYPE_CHROMIUM` at any Chrome or Chromium executable instead. The CLI runs the real editor in a hidden browser, so its output is exactly what the Export button makes.
 
 ## Loop
 
