@@ -17,6 +17,14 @@ Or push it to GitHub Pages as-is. Everything it needs is in this repo, including
 
 **Install it:** in Chrome or Edge use the install button in the address bar (or the Install app button in Meshtype's title bar). After the first load it runs fully offline.
 
+## Shapes
+
+**Add shape** drops a primitive into the scene:
+
+- **Box** and **Wall**: sharp, 12 triangles, sitting on the floor. Use them for room shells and anything whose edges you never see. A Wall starts at 4 × 3 × 0.2 m.
+- **Block, Panel, Disc, Orb**: squircles with two sliders. *Outline n* shapes the top view, *Edge n* the side profile (2 = round, 4 = classic squircle, 20 = nearly a box).
+- **Pill**, **SVG** (extrude an SVG), **Light** and **Spot**.
+
 ## Building rooms
 
 Meshtype doubles as a room blockout tool for Godot: build a room on a baseplate, export it as one GLB, and drop it into the game like a Lego piece.
@@ -168,7 +176,7 @@ sw.js                   service worker (network first, offline fallback)
 precache.json           file list for the service worker (generated)
 icons/                  app icons
 src/main.js             editor: scene, parts, unions, UI, export
-src/shapes.js           squircle + pill geometry generators
+src/shapes.js           box, squircle + pill geometry generators
 src/svg.js              SVG -> extruded geometry
 src/rounder.js          edge rounder (signed distance field)
 src/round-worker.js     runs the rounder off the main thread
