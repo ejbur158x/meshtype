@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.7" y2="1">
+      <stop offset="0" stop-color="#bff0ff"/><stop offset="0.55" stop-color="#4fb6f0"/><stop offset="1" stop-color="#1a78c4"/>
+    </linearGradient>
+    <linearGradient id="gl" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".85"/><stop offset="1" stop-color="#fff" stop-opacity=".05"/>
+    </linearGradient>
+    <linearGradient id="cb" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#cfeaff"/>
+    </linearGradient>
+  </defs>
+  <rect x="24" y="24" width="464" height="464" rx="150" fill="url(#bg)"/>
+  <rect x="24" y="24" width="464" height="464" rx="150" fill="none" stroke="#0b4a86" stroke-opacity=".55" stroke-width="6"/>
+  <path d="M60 190C60 100 120 52 256 52S452 100 452 190C380 150 140 150 60 190Z" fill="url(#gl)"/>
+  <g transform="translate(256 292)">
+    <path d="M0-120 104-60 0 0-104-60Z" fill="url(#cb)"/>
+    <path d="M-104-60 0 0V120L-104 60Z" fill="#79c6f5" stroke="#0b4a86" stroke-opacity=".5" stroke-width="5" stroke-linejoin="round"/>
+    <path d="M104-60 0 0V120L104 60Z" fill="#2c86c9" stroke="#0b4a86" stroke-opacity=".5" stroke-width="5" stroke-linejoin="round"/>
+    <path d="M0-120 104-60 0 0-104-60Z" fill="none" stroke="#0b4a86" stroke-opacity=".5" stroke-width="5" stroke-linejoin="round"/>
+  </g>
+</svg>

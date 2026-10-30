@@ -2,9 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Meshtype</title>
-<meta name="description" content="A tiny browser mesh editor for squircles and glossy Aero shapes, with boolean union, subtract and intersect, and GLB export.">
+<meta name="description" content="A tiny browser mesh editor for squircles and glossy Aero shapes. Union, negate, split, round edges, import SVG, export GLB. Installable and works offline.">
+<meta name="theme-color" content="#7fb0de">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/svg+xml" href="icons/icon.svg">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="stylesheet" href="style.css">
 <script type="importmap">
 {
@@ -18,65 +22,132 @@
 </script>
 </head>
 <body>
-<header class="bar">
-  <div class="brand">
+
+<!-- icon sprites -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <symbol id="cube" viewBox="0 0 24 24">
+      <path d="M12 2.5 21 7.5 12 12.5 3 7.5Z" fill="var(--ct)"/>
+      <path d="M3 7.5 12 12.5V22L3 17Z" fill="var(--cl)"/>
+      <path d="M21 7.5 12 12.5V22L21 17Z" fill="var(--cr)"/>
+      <path d="M12 2.5 21 7.5V17L12 22 3 17V7.5Z M3 7.5 12 12.5 21 7.5 M12 12.5V22" fill="none" stroke="rgba(8,40,80,.55)" stroke-width="1" stroke-linejoin="round"/>
+      <path d="M12 3.6 18.6 7.4 12 11.2 5.4 7.4Z" fill="#fff" opacity=".35"/>
+    </symbol>
+    <symbol id="i-union" viewBox="0 0 32 32">
+      <use href="#cube" x="1" y="7" width="19" height="19" style="--ct:#c9ecff;--cl:#5db9ee;--cr:#2c86c9"/>
+      <use href="#cube" x="12" y="5" width="19" height="19" style="--ct:#c9ecff;--cl:#5db9ee;--cr:#2c86c9"/>
+    </symbol>
+    <symbol id="i-negate" viewBox="0 0 32 32">
+      <use href="#cube" x="3" y="3" width="26" height="26" style="--ct:#ffc9cf;--cl:#f0596c;--cr:#c4263c"/>
+      <rect x="10" y="14.5" width="12" height="4" rx="2" fill="#fff" stroke="#8f1020" stroke-width="1"/>
+    </symbol>
+    <symbol id="i-split" viewBox="0 0 32 32">
+      <use href="#cube" x="0" y="11" width="15" height="15" style="--ct:#c9ecff;--cl:#5db9ee;--cr:#2c86c9"/>
+      <use href="#cube" x="17" y="11" width="15" height="15" style="--ct:#c9ecff;--cl:#5db9ee;--cr:#2c86c9"/>
+      <path d="M12 6 8 9l4 3M20 6l4 3-4 3" fill="none" stroke="#1d4f7a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-solid" viewBox="0 0 24 24"><use href="#cube" width="24" height="24" style="--ct:#c9ecff;--cl:#5db9ee;--cr:#2c86c9"/></symbol>
+    <symbol id="i-cutter" viewBox="0 0 24 24"><use href="#cube" width="24" height="24" style="--ct:#ffc9cf;--cl:#f0596c;--cr:#c4263c"/></symbol>
+    <symbol id="i-group" viewBox="0 0 24 24">
+      <use href="#cube" x="0" y="4" width="16" height="16" style="--ct:#c9ecff;--cl:#5db9ee;--cr:#2c86c9"/>
+      <use href="#cube" x="8" y="2" width="16" height="16" style="--ct:#c9ecff;--cl:#5db9ee;--cr:#2c86c9"/>
+    </symbol>
+    <symbol id="i-group-neg" viewBox="0 0 24 24">
+      <use href="#cube" x="0" y="4" width="16" height="16" style="--ct:#ffc9cf;--cl:#f0596c;--cr:#c4263c"/>
+      <use href="#cube" x="8" y="2" width="16" height="16" style="--ct:#ffc9cf;--cl:#f0596c;--cr:#c4263c"/>
+    </symbol>
+  </defs>
+</svg>
+
+<div class="win">
+  <header class="titlebar">
     <span class="logo" aria-hidden="true"></span>
     <span class="word">Meshtype</span>
-    <span class="ver">v0.1.0</span>
-  </div>
-  <input id="project-name" class="proj" type="text" value="untitled" maxlength="60" aria-label="Project name" spellcheck="false">
-  <div class="spacer"></div>
-  <div class="grp">
-    <button id="btn-undo" type="button" title="Undo (Ctrl+Z)">Undo</button>
-    <button id="btn-redo" type="button" title="Redo (Ctrl+Y)">Redo</button>
-  </div>
-  <div class="grp">
-    <button id="btn-open" type="button" title="Open a .meshtype.json project">Open</button>
-    <button id="btn-save" type="button" title="Save project as .meshtype.json">Save</button>
-  </div>
-  <label class="chk" title="Export plain white geometry and skip the Aero materials"><input id="chk-strip" type="checkbox"> Geometry only</label>
-  <div class="grp">
-    <button id="btn-obj" type="button">OBJ</button>
-    <button id="btn-glb" type="button" class="primary">Export GLB</button>
-  </div>
-  <input id="file-open" type="file" accept=".json,application/json" hidden>
-</header>
+    <span class="ver">v0.2.0</span>
+    <input id="project-name" class="proj" type="text" value="untitled" maxlength="60" aria-label="Project name" spellcheck="false">
+    <span class="spacer"></span>
+    <button id="btn-install" type="button" hidden title="Install Meshtype as an app">Install app</button>
+  </header>
 
-<main class="app">
-  <aside class="panel left" aria-label="Shapes and layers">
-    <h2>Add shape</h2>
-    <div class="adds">
-      <button type="button" data-add="block">Block</button>
-      <button type="button" data-add="panel">Panel</button>
-      <button type="button" data-add="disc">Disc</button>
-      <button type="button" data-add="orb">Orb</button>
-      <button type="button" data-add="pill">Pill</button>
+  <div class="cmdbar" role="toolbar" aria-label="File and export">
+    <div class="grp">
+      <button id="btn-undo" type="button" title="Undo (Ctrl+Z)">Undo</button>
+      <button id="btn-redo" type="button" title="Redo (Ctrl+Y)">Redo</button>
     </div>
-    <h2>Layers <span class="sub">top to bottom</span></h2>
-    <ul id="list" class="list"></ul>
-    <p class="note">Booleans run in list order. A Subtract or Intersect layer cuts everything above it. The cut faces take the material of the layer doing the cutting.</p>
-  </aside>
+    <span class="vsep"></span>
+    <div class="grp">
+      <button id="btn-open" type="button" title="Open a .meshtype.json project">Open</button>
+      <button id="btn-save" type="button" title="Save project as .meshtype.json">Save</button>
+      <button id="btn-svg" type="button" title="Import an SVG and extrude it">Import SVG</button>
+    </div>
+    <span class="spacer"></span>
+    <label class="chk" title="Export plain white geometry and skip the Aero materials"><input id="chk-strip" type="checkbox"> Geometry only</label>
+    <div class="grp">
+      <button id="btn-obj" type="button">Export OBJ</button>
+      <button id="btn-glb" type="button" class="primary">Export GLB</button>
+    </div>
+    <input id="file-open" type="file" accept=".json,application/json" hidden>
+    <input id="file-svg" type="file" accept=".svg,image/svg+xml" hidden>
+  </div>
 
-  <section class="stage" id="stage">
-    <canvas id="view" aria-label="3D viewport"></canvas>
-    <div class="tools" role="toolbar" aria-label="Viewport tools">
-      <div class="seg">
-        <button type="button" data-mode="translate" title="Move (W)" aria-pressed="true">Move</button>
-        <button type="button" data-mode="rotate" title="Rotate (E)" aria-pressed="false">Rotate</button>
-        <button type="button" data-mode="scale" title="Scale (R)" aria-pressed="false">Scale</button>
+  <main class="app">
+    <aside class="panel left" aria-label="Shapes and parts">
+      <h2>Add shape</h2>
+      <div class="adds">
+        <button type="button" data-add="block">Block</button>
+        <button type="button" data-add="panel">Panel</button>
+        <button type="button" data-add="disc">Disc</button>
+        <button type="button" data-add="orb">Orb</button>
+        <button type="button" data-add="pill">Pill</button>
       </div>
-      <label class="chk"><input id="chk-snap" type="checkbox" checked> Snap</label>
-      <label class="chk"><input id="chk-result" type="checkbox" checked> Result</label>
-      <label class="chk"><input id="chk-cages" type="checkbox"> Cages</label>
-      <label class="chk"><input id="chk-sky" type="checkbox" checked> Sky</label>
-    </div>
-    <div id="empty" class="empty" hidden>Add a shape to start.</div>
-    <div id="stats" class="stats"></div>
-    <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  </section>
 
-  <aside class="panel right" id="inspector" aria-label="Inspector"></aside>
-</main>
+      <h2>Combine</h2>
+      <div class="boolbar">
+        <button id="btn-union" type="button" class="bigop" title="Blend the selected parts into one solid. Cutters subtract. (U)">
+          <svg class="ico" aria-hidden="true"><use href="#i-union"/></svg><b>UNION</b>
+        </button>
+        <button id="btn-negate" type="button" class="bigop" aria-pressed="false" title="Flip the selection between solid and cutter (N)">
+          <svg class="ico" aria-hidden="true"><use href="#i-negate"/></svg><b>NEGATE</b>
+        </button>
+        <button id="btn-split" type="button" class="bigop" title="Break unions back into separate parts. Nothing selected = split everything. (X)">
+          <svg class="ico" aria-hidden="true"><use href="#i-split"/></svg><b>SPLIT</b>
+        </button>
+      </div>
+      <button id="btn-intersect" type="button" class="wide" title="Keep only where the selected parts overlap">Intersect (keep the overlap)</button>
+      <p class="note">Ctrl or Shift + click to pick several. <b>Red</b> parts are cutters: they do nothing until you UNION them with a solid.</p>
+
+      <h2>Parts</h2>
+      <ul id="list" class="list"></ul>
+    </aside>
+
+    <section class="stage" id="stage">
+      <canvas id="view" aria-label="3D viewport"></canvas>
+      <div class="tools" role="toolbar" aria-label="Viewport tools">
+        <div class="seg">
+          <button type="button" data-mode="translate" title="Move (1)" aria-pressed="true">Move</button>
+          <button type="button" data-mode="rotate" title="Rotate (2)" aria-pressed="false">Rotate</button>
+          <button type="button" data-mode="scale" title="Scale (3)" aria-pressed="false">Scale</button>
+        </div>
+        <label class="chk"><input id="chk-snap" type="checkbox" checked> Snap</label>
+        <label class="chk"><input id="chk-result" type="checkbox" checked> Result</label>
+        <label class="chk"><input id="chk-cages" type="checkbox"> Cages</label>
+        <label class="chk"><input id="chk-sky" type="checkbox" checked> Sky</label>
+      </div>
+      <div id="empty" class="empty" hidden>Add a shape, or drop an SVG here.</div>
+      <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    </section>
+
+    <aside class="panel right" id="inspector" aria-label="Inspector"></aside>
+  </main>
+
+  <footer class="status">
+    <span id="hint">WASD fly · Q down · E up · Shift fine · Ctrl fast · right-click for the menu</span>
+    <span class="spacer"></span>
+    <span id="stats"></span>
+  </footer>
+</div>
+
+<div id="ctx" class="ctx" role="menu" hidden></div>
 
 <script type="module" src="src/main.js"></script>
 </body>

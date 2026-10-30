@@ -1,0 +1,29 @@
+{
+  "version": "711327900f",
+  "files": [
+    "./",
+    "./index.html",
+    "./style.css",
+    "./manifest.webmanifest",
+    "./icons/apple-touch-icon.png",
+    "./icons/icon-192.png",
+    "./icons/icon-512.png",
+    "./icons/icon-maskable-512.png",
+    "./icons/icon.svg",
+    "./src/main.js",
+    "./src/materials.js",
+    "./src/round-worker.js",
+    "./src/rounder.js",
+    "./src/shapes.js",
+    "./src/svg.js",
+    "./vendor/three/addons/controls/OrbitControls.js",
+    "./vendor/three/addons/controls/TransformControls.js",
+    "./vendor/three/addons/exporters/GLTFExporter.js",
+    "./vendor/three/addons/exporters/OBJExporter.js",
+    "./vendor/three/addons/loaders/SVGLoader.js",
+    "./vendor/three/three.core.js",
+    "./vendor/three/three.module.js",
+    "./vendor/three-bvh-csg.module.js",
+    "./vendor/three-mesh-bvh.module.js"
+  ]
+}

@@ -28,6 +28,11 @@ export const SHAPES = {
     defaults: { radius: 0.25, length: 0.5, detail: 2 },
     limits: { radius: [0.05, 0.5], length: [0, 2], detail: [1, 4] },
   },
+  // Geometry for 'svg' parts is built by svg.js from the project's asset store.
+  svg: {
+    defaults: { depth: 0.3, detail: 2 },
+    limits: { depth: [0.02, 2], detail: [1, 4] },
+  },
 };
 
 function superellipsoid({ nPlan, nProf, detail }) {
