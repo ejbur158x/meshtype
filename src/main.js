@@ -1,4 +1,4 @@
-// Meshtype v0.2.2
+// Meshtype v0.3.0
 // A small browser mesh editor: squircle primitives, union / negate / split,
 // edge rounding, SVG extrusion, GLB export.
 
@@ -12,8 +12,9 @@ import { SHAPES, makeGeometry } from './shapes.js';
 import { MATERIALS, applyMaterial, makeAeroEnvironment } from './materials.js';
 import { inspectSvg, makeSvgGeometry } from './svg.js';
 import { roundMesh, boxUVs } from './rounder.js';
+import { FLOORS, floorMaterial } from './floor.js';
 
-const VERSION = '0.2.2';
+const VERSION = '0.3.0';
 const STORE_KEY = 'meshtype.autosave';
 
 const PRESETS = {
@@ -79,6 +80,7 @@ const el = {
   fileSvg: $('#file-svg'),
   fileSky: $('#file-sky'),
   fileTex: $('#file-tex'),
+  col: $('#chk-col'),
   progress: $('#progress'),
   strip: $('#chk-strip'),
   ctx: $('#ctx'),
@@ -120,7 +122,20 @@ function download(filename, data, type) {
  * are added together and its cutter children are subtracted. Groups can nest.
  */
 
-let state = { name: 'untitled', nodes: [], assets: {}, sel: [], active: null, nextId: 1 };
+const GRID_SIZES = [0.05, 0.25, 0.5, 1, 2];
+const DEFAULT_FLOOR = { on: false, w: 10, d: 10, preset: 'tile', grid: 0.5 };
+function sanitizeFloor(f) {
+  const src = f && typeof f === 'object' ? f : {};
+  return {
+    on: src.on === true,
+    w: clamp(Number(src.w) || DEFAULT_FLOOR.w, 1, 200),
+    d: clamp(Number(src.d) || DEFAULT_FLOOR.d, 1, 200),
+    preset: FLOORS[src.preset] ? src.preset : DEFAULT_FLOOR.preset,
+    grid: GRID_SIZES.includes(Number(src.grid)) ? Number(src.grid) : DEFAULT_FLOOR.grid,
+  };
+}
+
+let state = { name: 'untitled', nodes: [], assets: {}, sel: [], active: null, nextId: 1, floor: { ...DEFAULT_FLOOR } };
 const view = {
   mode: 'translate',
   snap: true,
@@ -355,10 +370,44 @@ const sun = new THREE.DirectionalLight(0xffffff, 1.1);
 sun.position.set(3, 5, 2);
 scene.add(sun);
 
-const grid = new THREE.GridHelper(8, 32, 0x2f8fcf, 0x8fc4e4);
-grid.material.transparent = true;
-grid.material.opacity = 0.45;
-scene.add(grid);
+let grid = null;
+let gridKey = '';
+const floorMesh = new THREE.Mesh(new THREE.BoxGeometry(1, 0.06, 1), floorMaterial('tile'));
+floorMesh.position.y = -0.03;
+floorMesh.visible = false;
+scene.add(floorMesh);
+
+/** Baseplate + grid lines + move snapping, all from state.floor. */
+function syncFloor() {
+  const f = state.floor;
+  floorMesh.visible = f.on;
+  floorMesh.scale.set(f.w, 1, f.d);
+  const mat = floorMaterial(f.preset);
+  floorMesh.material = mat;
+  const tile = FLOORS[f.preset].tile;
+  mat.map.repeat.set(f.w / tile, f.d / tile);
+  const size = f.on ? Math.max(f.w, f.d) : 20;
+  let step = f.grid;
+  while (size / step > 400) step *= 2; // keep the line count sane
+  const key = `${size}|${step}|${f.on}`;
+  if (key !== gridKey) {
+    gridKey = key;
+    if (grid) {
+      scene.remove(grid);
+      grid.geometry.dispose();
+      grid.material.dispose();
+    }
+    const div = Math.max(1, Math.round(size / step));
+    grid = new THREE.GridHelper(div * step, div, f.on ? 0x1f6fb0 : 0x2f8fcf, f.on ? 0x5d8fb5 : 0x8fc4e4);
+    grid.material.transparent = true;
+    grid.material.opacity = f.on ? 0.35 : 0.45;
+    grid.position.y = f.on ? 0.003 : 0;
+    scene.add(grid);
+  }
+  if (typeof applySnap === 'function') applySnap();
+  const gs = document.querySelector('#grid-size');
+  if (gs) gs.value = String(f.grid);
+}
 
 const orbit = new OrbitControls(camera, el.canvas);
 orbit.enableDamping = true;
@@ -1176,7 +1225,7 @@ async function settleRounds() {
 const hist = { stack: [], i: -1 };
 
 function projectData() {
-  return { app: 'meshtype', version: VERSION, name: state.name, nextId: state.nextId, nodes: state.nodes, assets: state.assets };
+  return { app: 'meshtype', version: VERSION, name: state.name, nextId: state.nextId, nodes: state.nodes, assets: state.assets, floor: state.floor };
 }
 
 function snapshot() {
@@ -1249,8 +1298,11 @@ function restore(data) {
     sel,
     active: ids.has(data.active) && sel.includes(data.active) ? data.active : sel[sel.length - 1] ?? null,
     nextId: p.nextId,
+    floor: sanitizeFloor(data.floor),
   };
   el.name.value = state.name;
+  syncFloor();
+  renderFloorPanel();
   syncAll();
   attachGizmo();
   requestSolve();
@@ -1976,7 +2028,7 @@ function setMode(mode) {
 document.querySelectorAll('[data-mode]').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
 
 function applySnap() {
-  transform.setTranslationSnap(view.snap ? 0.05 : null);
+  transform.setTranslationSnap(view.snap ? state.floor.grid : null);
   transform.setRotationSnap(view.snap ? deg2rad(15) : null);
   transform.setScaleSnap(view.snap ? 0.05 : null);
 }
@@ -2157,8 +2209,27 @@ el.canvas.addEventListener('pointerdown', (e) => {
   closeMenu();
   if (e.button === 1) e.preventDefault(); // no middle-click autoscroll
   const onGizmo = transform.axis !== null && transform.axis !== undefined;
-  downInfo = { x: e.clientX, y: e.clientY, button: e.button, onGizmo, box: false };
+  downInfo = { x: e.clientX, y: e.clientY, button: e.button, onGizmo, box: false, ground: null };
   if (e.button === 0 && !onGizmo) {
+    // grabbing a shape drags it (and the rest of the selection) along the floor
+    const leafId = pickAt(e.clientX, e.clientY);
+    if (leafId != null && lastPickPoint) {
+      const target = e.altKey ? leafId : topOf(leafId).id;
+      const multi = e.ctrlKey || e.metaKey || e.shiftKey;
+      const inSel = state.sel.includes(target) || uniqueTops().some((t) => t.id === target);
+      if (!inSel && !multi) selectOnly(target);
+      if (inSel || !multi) {
+        const start = groundPoint(e.clientX, e.clientY, lastPickPoint.y);
+        if (start) {
+          downInfo.ground = {
+            y: lastPickPoint.y,
+            start,
+            active: false,
+            leaves: selLeaves().map((o) => ({ o, pos: o.pos.slice() })),
+          };
+        }
+      }
+    }
     try {
       el.canvas.setPointerCapture(e.pointerId);
     } catch (err) {
@@ -2170,6 +2241,27 @@ el.canvas.addEventListener('pointerdown', (e) => {
 el.canvas.addEventListener('pointermove', (e) => {
   const d = downInfo;
   if (!d || d.button !== 0 || d.onGizmo) return;
+  if (d.ground) {
+    if (!d.ground.active && Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4) d.ground.active = true;
+    if (!d.ground.active) return;
+    const p = groundPoint(e.clientX, e.clientY, d.ground.y);
+    if (!p) return;
+    let dx = p.x - d.ground.start.x;
+    let dz = p.z - d.ground.start.z;
+    if (view.snap) {
+      const g = state.floor.grid;
+      dx = Math.round(dx / g) * g;
+      dz = Math.round(dz / g) * g;
+    }
+    for (const { o, pos } of d.ground.leaves) {
+      o.pos = [round(pos[0] + dx), pos[1], round(pos[2] + dz)];
+      syncRT(o);
+    }
+    if (transform.object === pivot) recenterPivot();
+    requestSolve();
+    planeDirty = true;
+    return;
+  }
   if (!d.box && Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4) d.box = true;
   if (!d.box) return;
   const r = el.stage.getBoundingClientRect();
@@ -2231,7 +2323,20 @@ function pickAt(clientX, clientY) {
   raycaster.setFromCamera(ndc, camera);
   const proxies = state.nodes.filter((o) => o.kind === 'part' && o.visible && rt.has(o.id)).map((o) => rt.get(o.id).proxy);
   const hit = raycaster.intersectObjects(proxies, false)[0];
+  lastPickPoint = hit ? hit.point.clone() : null;
   return hit ? hit.object.userData.id : null;
+}
+let lastPickPoint = null;
+
+/* drag along the ground: a horizontal plane through the grab point */
+const _plane = new THREE.Plane();
+const _hit = new THREE.Vector3();
+function groundPoint(clientX, clientY, y) {
+  const rect = el.canvas.getBoundingClientRect();
+  const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  _plane.set(new THREE.Vector3(0, 1, 0), -y);
+  return raycaster.ray.intersectPlane(_plane, _hit) ? _hit.clone() : null;
 }
 
 el.canvas.addEventListener('pointerup', (e) => {
@@ -2239,6 +2344,17 @@ el.canvas.addEventListener('pointerup', (e) => {
   const info = downInfo;
   downInfo = null;
   const moved = Math.hypot(e.clientX - info.x, e.clientY - info.y);
+  if (info.ground && info.ground.active) {
+    try {
+      el.canvas.releasePointerCapture(e.pointerId);
+    } catch (err) {
+      /* ignore */
+    }
+    attachGizmo();
+    commit();
+    renderInspector();
+    return;
+  }
   if (info.box) {
     marquee.hidden = true;
     try {
@@ -2551,10 +2667,32 @@ async function exportGroup() {
       }
     }
     if (mesh) {
-      mesh.name = slug(n.name);
+      mesh.name = slug(n.name) + (el.col && el.col.checked ? '-col' : '');
       grp.add(mesh);
     }
   }
+  const f = state.floor;
+  if (f.on) {
+    const g = new THREE.BoxGeometry(f.w, 0.06, f.d);
+    g.translate(0, -0.03, 0);
+    // UVs in meters so the texture tiles the same as in the editor
+    g.setAttribute('uv', new THREE.BufferAttribute(boxUVs(g.attributes.position.array, g.attributes.normal.array), 2));
+    let m;
+    if (strip) m = plain();
+    else {
+      m = floorMaterial(f.preset).clone();
+      m.map = m.map.clone();
+      const tile = FLOORS[f.preset].tile;
+      m.map.repeat.set(1 / tile, 1 / tile);
+      m.map.needsUpdate = true;
+      if (m.emissiveMap) m.emissiveMap = m.map;
+    }
+    const floor = new THREE.Mesh(g, m);
+    floor.name = 'floor' + (el.col && el.col.checked ? '-col' : '');
+    grp.add(floor);
+  }
+  // room info for whoever assembles rooms in Godot (shows up as glTF extras)
+  grp.userData = { meshtype: { version: VERSION, grid: f.grid, floor: f.on ? { w: f.w, d: f.d, preset: f.preset } : null } };
   return grp.children.length ? grp : null;
 }
 
@@ -2598,6 +2736,101 @@ function resize() {
   camera.updateProjectionMatrix();
 }
 new ResizeObserver(resize).observe(el.stage);
+
+/* window chrome: caption buttons + desktop wallpaper */
+
+const WALL_KEY = 'meshtype.wallpaper';
+function applyWallpaper(url) {
+  if (url) {
+    document.body.style.setProperty('--wallpaper', `url("${url}")`);
+    document.body.classList.add('has-wallpaper');
+  } else {
+    document.body.style.removeProperty('--wallpaper');
+    document.body.classList.remove('has-wallpaper');
+  }
+}
+try {
+  applyWallpaper(localStorage.getItem(WALL_KEY));
+} catch (e) {
+  /* no storage */
+}
+const fileWall = $('#file-wall');
+$('#btn-wall').addEventListener('click', () => fileWall.click());
+$('#btn-wall-reset').addEventListener('click', () => {
+  applyWallpaper(null);
+  try {
+    localStorage.removeItem(WALL_KEY);
+  } catch (e) {
+    /* ignore */
+  }
+});
+fileWall.addEventListener('change', async () => {
+  const file = fileWall.files && fileWall.files[0];
+  fileWall.value = '';
+  if (!file) return;
+  try {
+    const url = await shrinkImage(file, 2560);
+    applyWallpaper(url);
+    try {
+      localStorage.setItem(WALL_KEY, url);
+    } catch (e) {
+      toast('Wallpaper set for this session (too big to remember).');
+    }
+  } catch (err) {
+    toast('Could not load that wallpaper: ' + err.message);
+  }
+});
+$('#cap-min').addEventListener('click', () => {
+  document.querySelector('.app').classList.toggle('focus-view');
+});
+$('#cap-max').addEventListener('click', () => {
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  else document.documentElement.requestFullscreen().catch(() => toast('Fullscreen is not available here.'));
+});
+$('#cap-close').addEventListener('click', () => {
+  window.close();
+  setTimeout(() => toast('Browsers only let you close this tab yourself. (In the installed app it closes.)'), 150);
+});
+
+/* floor panel */
+
+const floorPanel = $('#floor-panel');
+const floorBtn = $('#btn-floor');
+function renderFloorPanel() {
+  const f = state.floor;
+  $('#floor-on').checked = f.on;
+  $('#floor-w').value = f.w;
+  $('#floor-d').value = f.d;
+  $('#floor-preset').value = f.preset;
+  floorBtn.setAttribute('aria-pressed', String(f.on));
+}
+function toggleFloorPanel(open) {
+  const show = open ?? floorPanel.hidden;
+  floorPanel.hidden = !show;
+  floorBtn.setAttribute('aria-expanded', String(show));
+}
+floorBtn.addEventListener('click', () => toggleFloorPanel());
+window.addEventListener('pointerdown', (e) => {
+  if (!floorPanel.hidden && !floorPanel.contains(e.target) && e.target !== floorBtn) toggleFloorPanel(false);
+});
+$('#floor-preset').innerHTML = Object.entries(FLOORS).map(([k, v]) => `<option value="${k}">${v.label}</option>`).join('');
+floorPanel.addEventListener('change', (e) => {
+  const f = state.floor;
+  const t = e.target;
+  if (t.id === 'floor-on') f.on = t.checked;
+  else if (t.id === 'floor-w') f.w = clamp(parseFloat(t.value) || f.w, 1, 200);
+  else if (t.id === 'floor-d') f.d = clamp(parseFloat(t.value) || f.d, 1, 200);
+  else if (t.id === 'floor-preset') f.preset = t.value;
+  else return;
+  syncFloor();
+  renderFloorPanel();
+  commit();
+});
+$('#grid-size').addEventListener('change', (e) => {
+  state.floor.grid = Number(e.target.value);
+  syncFloor();
+  commit();
+});
 
 /* view cube: shows the camera orientation, click a face for that view, drag to orbit */
 

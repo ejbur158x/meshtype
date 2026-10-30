@@ -9,7 +9,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<link rel="stylesheet" href="style.css?v=0.2.2">
+<link rel="stylesheet" href="style.css?v=0.3.0">
 <script type="importmap">
 {
   "imports": {
@@ -63,10 +63,15 @@
   <header class="titlebar">
     <span class="logo" aria-hidden="true"></span>
     <span class="word">Meshtype</span>
-    <span class="ver">v0.2.2</span>
+    <span class="ver">v0.3.0</span>
     <input id="project-name" class="proj" type="text" value="untitled" maxlength="60" aria-label="Project name" spellcheck="false">
     <span class="spacer"></span>
     <button id="btn-install" type="button" hidden title="Install Meshtype as an app">Install app</button>
+    <div class="caption">
+      <button id="cap-min" type="button" title="Hide the side panels (focus the viewport)" aria-label="Focus viewport"><svg viewBox="0 0 11 10" aria-hidden="true"><rect x="1" y="6" width="9" height="3" fill="#fff" stroke="#233" stroke-width="1"/></svg></button>
+      <button id="cap-max" type="button" title="Fullscreen" aria-label="Fullscreen"><svg viewBox="0 0 11 10" aria-hidden="true"><rect x="1" y="1" width="9" height="8" fill="none" stroke="#233" stroke-width="3"/><rect x="1" y="1" width="9" height="8" fill="none" stroke="#fff" stroke-width="1.4"/></svg></button>
+      <button id="cap-close" type="button" class="close" title="Close" aria-label="Close"><svg viewBox="0 0 11 10" aria-hidden="true"><path d="M2 1l7 8M9 1L2 9" stroke="#233" stroke-width="3.4" stroke-linecap="round"/><path d="M2 1l7 8M9 1L2 9" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/></svg></button>
+    </div>
   </header>
 
   <div class="cmdbar" role="toolbar" aria-label="File and export">
@@ -80,6 +85,7 @@
       <button id="btn-save" type="button" title="Save project as .meshtype.json">Save</button>
     </div>
     <span class="spacer"></span>
+    <label class="chk" title="Name meshes with -col so Godot builds collision for them on import"><input id="chk-col" type="checkbox" checked> Godot collision</label>
     <label class="chk" title="Export plain white geometry and skip the Aero materials"><input id="chk-strip" type="checkbox"> Geometry only</label>
     <div class="grp">
       <button id="btn-obj" type="button">Export OBJ</button>
@@ -89,6 +95,7 @@
     <input id="file-svg" type="file" accept=".svg,image/svg+xml" hidden>
     <input id="file-sky" type="file" accept="image/*" hidden>
     <input id="file-tex" type="file" accept="image/*" hidden>
+    <input id="file-wall" type="file" accept="image/*" hidden>
   </div>
 
   <main class="app">
@@ -131,6 +138,11 @@
           <button type="button" data-mode="scale" title="Scale (3)" aria-pressed="false">Scale</button>
         </div>
         <label class="chk"><input id="chk-snap" type="checkbox" checked> Snap</label>
+        <label class="chk" title="Grid and move-snap size">Grid
+          <select id="grid-size" class="mini" aria-label="Grid size">
+            <option value="0.05">0.05 m</option><option value="0.25">0.25 m</option><option value="0.5" selected>0.5 m</option><option value="1">1 m</option><option value="2">2 m</option>
+          </select></label>
+        <button id="btn-floor" type="button" aria-expanded="false" aria-controls="floor-panel" aria-pressed="false" title="Baseplate to build rooms on">Floor ▾</button>
         <label class="chk"><input id="chk-result" type="checkbox" checked> Result</label>
         <label class="chk"><input id="chk-cages" type="checkbox"> Cages</label>
         <button id="btn-sky" type="button" aria-expanded="false" aria-controls="sky-panel" title="Sky background">Sky ▾</button>
@@ -152,8 +164,17 @@
             <button type="button" class="sw" data-swatch="#000000" style="background:#000" aria-label="Black"></button>
             <input id="sky-color" type="color" value="#bfe9ff" aria-label="Custom sky color">
           </div></div>
+        <div class="field"><span class="lbl">Desktop wallpaper <span class="sub">(behind the window)</span></span>
+          <div class="inline"><button type="button" id="btn-wall">Upload…</button><button type="button" id="btn-wall-reset">Default</button></div></div>
         <div class="field"><span class="lbl">Skybox image <span class="sub">(equirectangular panorama)</span></span>
           <div class="inline"><button type="button" id="btn-sky-upload">Upload…</button><label class="chk"><input id="sky-reflect" type="checkbox" checked> Reflect it</label></div></div>
+      </div>
+      <div id="floor-panel" class="skypanel floorpanel" hidden>
+        <label class="chk"><input id="floor-on" type="checkbox"> Show baseplate</label>
+        <div class="field"><span class="lbl">Size (meters)</span>
+          <div class="two"><input id="floor-w" type="number" min="1" max="200" step="1" aria-label="Floor width"><input id="floor-d" type="number" min="1" max="200" step="1" aria-label="Floor depth"></div></div>
+        <div class="field"><span class="lbl">Flooring</span><select id="floor-preset" aria-label="Flooring"></select></div>
+        <p class="tip">The floor's top sits at height 0 and exports with the room.</p>
       </div>
       <div id="marquee" class="marquee" hidden></div>
       <div id="vcube" class="vcube" aria-label="View selector. Click a face or drag to orbit.">
@@ -183,6 +204,6 @@
 
 <div id="ctx" class="ctx" role="menu" hidden></div>
 
-<script type="module" src="src/main.js?v=0.2.2"></script>
+<script type="module" src="src/main.js?v=0.3.0"></script>
 </body>
 </html>

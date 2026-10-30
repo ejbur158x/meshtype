@@ -23,29 +23,67 @@ body {
   font: 12px/1.4 var(--font);
   color: var(--text);
   overflow: hidden;
-  /* Aero wallpaper: deep blue with soft light blooms */
-  background:
-    radial-gradient(ellipse 60% 50% at 18% 12%, rgba(120, 220, 255, 0.85), transparent 65%),
-    radial-gradient(ellipse 50% 45% at 85% 20%, rgba(80, 170, 255, 0.6), transparent 70%),
-    radial-gradient(ellipse 60% 50% at 70% 95%, rgba(40, 200, 170, 0.7), transparent 70%),
-    linear-gradient(140deg, #0a2f66 0%, #1666a8 45%, #1e9bb8 100%) fixed;
+  /* desktop: your own wallpaper if set (JS), otherwise an original sky-and-hills scene */
+  background-color: #2f7fe0;
+  /* default wallpaper: "Longhorn Bliss" by yethzart, CC BY-NC-ND 3.0 (see README credits); the
+     gradients underneath are the fallback while it loads */
+  background-image:
+    url("assets/longhorn-bliss.jpg"),
+    radial-gradient(ellipse 85% 42% at 30% 108%, #4f9a1e 0, #6fb52d 55%, rgba(111, 181, 45, 0) 56%),
+    radial-gradient(ellipse 90% 38% at 85% 112%, #5aa623 0, #82c83c 60%, rgba(130, 200, 60, 0) 61%),
+    radial-gradient(ellipse 18% 6% at 22% 22%, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0) 70%),
+    radial-gradient(ellipse 24% 7% at 70% 34%, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0) 70%),
+    radial-gradient(ellipse 14% 5% at 48% 14%, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0) 70%),
+    linear-gradient(180deg, #1f5fd0 0%, #3d86e6 45%, #8cc4f5 75%, #b9dcf7 100%);
+  background-size: cover;
+  background-position: center;
+  background-attachment: fixed;
 }
+body.has-wallpaper { background-image: var(--wallpaper); }
 
+/* Windows 7 Aero glass window: see-through frame with blur, light streaks, thin borders */
 .win {
   position: fixed;
-  inset: 6px;
+  inset: 16px 18px 18px;
   display: flex;
   flex-direction: column;
-  border: 1px solid rgba(0, 0, 0, 0.7);
-  border-radius: 8px 8px 4px 4px;
-  /* Aero glass frame */
+  border: 1px solid rgba(0, 0, 0, 0.72);
+  border-radius: 7px 7px 5px 5px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.55) 0, rgba(255, 255, 255, 0.12) 38px, rgba(255, 255, 255, 0) 60px),
-    linear-gradient(135deg, rgba(185, 215, 242, 0.92), rgba(130, 176, 222, 0.92) 55%, rgba(160, 200, 232, 0.92));
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.65), 0 8px 28px rgba(0, 20, 60, 0.6);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.42) 0, rgba(255, 255, 255, 0.08) 30px, rgba(255, 255, 255, 0) 31px),
+    repeating-linear-gradient(118deg, rgba(255, 255, 255, 0) 0 70px, rgba(255, 255, 255, 0.14) 70px 92px, rgba(255, 255, 255, 0) 92px 150px, rgba(255, 255, 255, 0.08) 150px 160px, rgba(255, 255, 255, 0) 160px 260px),
+    rgba(120, 165, 215, 0.42);
+  -webkit-backdrop-filter: blur(12px) saturate(1.7);
+  backdrop-filter: blur(12px) saturate(1.7);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.12), 0 10px 40px rgba(0, 0, 0, 0.55);
   padding: 0 7px 7px;
   overflow: hidden;
 }
+
+/* caption buttons, glued to the top edge like Win7 */
+.caption { display: flex; align-self: flex-start; margin: -1px -1px 0 6px; }
+.caption button {
+  min-height: 0; height: 20px; width: 27px; padding: 0;
+  display: grid; place-items: center;
+  border: 1px solid rgba(0, 0, 0, 0.55); border-top: 0; border-radius: 0; margin-left: -1px;
+  background: linear-gradient(rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0.18) 45%, rgba(0, 0, 0, 0.08) 50%, rgba(255, 255, 255, 0.25));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.5);
+}
+.caption button:first-child { border-bottom-left-radius: 5px; margin-left: 0; }
+.caption button:last-child { border-bottom-right-radius: 5px; }
+.caption button svg { width: 11px; height: 10px; filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.9)); }
+.caption button:hover:not(:disabled) {
+  border-color: rgba(0, 0, 0, 0.55);
+  background: linear-gradient(rgba(220, 240, 255, 0.9), rgba(120, 190, 240, 0.7) 45%, rgba(40, 120, 200, 0.7) 50%, rgba(120, 220, 255, 0.85));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.5), 0 0 8px rgba(120, 210, 255, 0.9);
+}
+.caption .close { width: 46px; background: linear-gradient(#e8a493, #d0705b 45%, #b03a22 50%, #d0624c 85%, #e3907a); }
+.caption .close:hover:not(:disabled) {
+  background: linear-gradient(#fbb9a6, #ea7f62 45%, #d0381a 50%, #ef6a45 85%, #ffa47f);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.5), 0 0 10px rgba(255, 110, 60, 0.95);
+}
+.app.focus-view { grid-template-columns: 0 minmax(0, 1fr) 0; }
+.app.focus-view > .panel { display: none; }
 
 button, input, select { font: inherit; color: inherit; }
 
@@ -56,7 +94,7 @@ button, input, select { font: inherit; color: inherit; }
   align-items: center;
   gap: 8px;
   min-height: 30px;
-  padding: 3px 2px 2px;
+  padding: 0 0 2px 2px;
 }
 .logo {
   width: 18px; height: 18px; border-radius: 5px;
@@ -349,6 +387,7 @@ input[type="range"]::-moz-range-thumb { width: 9px; height: 17px; border: 1px so
 @media (max-width: 980px) {
   body { overflow: auto; }
   .win { position: static; min-height: 100vh; margin: 6px; }
+  .caption { display: none; }
   .app { grid-template-columns: minmax(0, 1fr); grid-auto-rows: auto; }
   .stage { height: 62vh; order: -1; }
   .panel { overflow: visible; }
@@ -418,3 +457,8 @@ input[type="range"]::-moz-range-thumb { width: 9px; height: 17px; border: 1px so
   text-shadow: 0 0 3px #fff, 0 0 3px #fff;
 }
 @media (prefers-reduced-motion: reduce) { .pfill::after { animation: none; } }
+
+select.mini { width: auto; min-height: 20px; padding: 0 2px; }
+.floorpanel { left: auto; right: auto; margin-left: 330px; }
+.floorpanel .chk { margin-bottom: 6px; }
+#btn-floor[aria-pressed="true"] { color: #0b4a86; font-weight: 600; }

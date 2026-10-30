@@ -5,7 +5,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
-const include = ['index.html', 'style.css', 'manifest.webmanifest', 'sw.js', 'icons', 'src', 'vendor'];
+const include = ['index.html', 'style.css', 'manifest.webmanifest', 'sw.js', 'icons', 'assets', 'src', 'vendor'];
 const skip = /(^|\/)(README\.md)$/;
 const files = [];
 const walk = (rel) => {

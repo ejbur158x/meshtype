@@ -1,5 +1,5 @@
 {
-  "version": "3a7b407da5",
+  "version": "e9e2ab1dbe",
   "files": [
     "./",
     "./index.html",
@@ -10,6 +10,8 @@
     "./icons/icon-512.png",
     "./icons/icon-maskable-512.png",
     "./icons/icon.svg",
+    "./assets/longhorn-bliss.jpg",
+    "./src/floor.js",
     "./src/main.js",
     "./src/materials.js",
     "./src/round-worker.js",

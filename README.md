@@ -1,6 +1,6 @@
 # Meshtype
 
-**v0.2.2.** A tiny browser mesh editor for squircles and glossy Frutiger Aero shapes. Solid and cutter parts, UNION / NEGATE / SPLIT, edge rounding, SVG extrusion, multi-select, and GLB export. No build step. Installable as an app and works offline.
+**v0.3.0.** A tiny browser mesh editor for squircles and glossy Frutiger Aero shapes. Solid and cutter parts, UNION / NEGATE / SPLIT, edge rounding, SVG extrusion, multi-select, and GLB export. No build step. Installable as an app and works offline.
 
 Made because Blender is overkill when all you need is a rounded panel with a dent in it.
 
@@ -16,6 +16,18 @@ python -m http.server 8000
 Or push it to GitHub Pages as-is. Everything it needs is in this repo, including the libraries (`vendor/`).
 
 **Install it:** in Chrome or Edge use the install button in the address bar (or the Install app button in Meshtype's title bar). After the first load it runs fully offline.
+
+## Building rooms
+
+Meshtype doubles as a room blockout tool for Godot: build a room on a baseplate, export it as one GLB, and drop it into the game like a Lego piece.
+
+- **Floor ▾** (viewport toolbar): turn the baseplate on, set its size in meters, and pick a flooring: Aero carpet, Office tile, Glossy lab, Dark grid, Concrete. The top of the floor is at height 0.
+- **Grid**: 0.05, 0.25, 0.5, 1 or 2 m. With Snap on, moves snap to it. Keep every room on the same grid (1 m is a good default) so rooms line up when they are assembled.
+- **Drag on the ground**: left-drag a shape to slide it (and the rest of the selection) across the floor. Its height stays the same; use the gizmo's up arrow to change height.
+- **Godot collision** (next to Export): names every mesh with `-col`, so Godot's importer builds static collision for it automatically. The floor exports as `floor`.
+- The GLB's root node is named after the project and carries `meshtype` info (grid size, floor size) in its glTF extras.
+
+Units are meters on both sides, so a room exported here is to scale in Godot.
 
 ## The combine model
 
@@ -49,7 +61,7 @@ With several things selected the gizmo moves them together.
 | `Shift` | Fine movement (held) |
 | `Ctrl` | Fast movement (held) |
 
-**Mouse:** right-drag orbits, middle-drag pans, the wheel zooms, and left-drag draws a selection box (an object is selected when at least 80% of it is inside the box; hold Shift or Ctrl to add). Right-click without dragging opens the menu.
+**Mouse:** right-drag orbits, middle-drag pans, the wheel zooms. Left-drag on a shape slides it along the ground; left-drag on empty space draws a selection box (an object is selected when at least 80% of it is inside the box; hold Shift or Ctrl to add). Right-click without dragging opens the menu.
 
 **View cube** (top right of the viewport): click a face for that view, or drag it to orbit.
 
@@ -126,8 +138,9 @@ src/svg.js              SVG -> extruded geometry
 src/rounder.js          edge rounder (signed distance field)
 src/round-worker.js     runs the rounder off the main thread
 src/materials.js        material presets + procedural sky
+src/floor.js            baseplate flooring presets (procedural textures)
 tools/                  build-precache.mjs, make-icons.mjs
-tests/                  rounder.test.mjs, e2e.mjs, e2e-controls.mjs, e2e-union.mjs
+tests/                  rounder.test.mjs, e2e*.mjs (real-browser checks)
 vendor/                 three.js, three-mesh-bvh, three-bvh-csg (see vendor/README.md)
 ```
 
@@ -139,7 +152,7 @@ The service worker caches the whole app. After you edit any file, regenerate the
 node tools/build-precache.mjs
 ```
 
-## Known limits (v0.2.2)
+## Known limits (v0.3.0)
 
 - Booleans are live, so keep Detail at 2 or 3 on dense scenes.
 - Scaling a rotated part from a multi-selection gizmo can introduce shear, which Meshtype can't store. Use Scale on single parts for that.
@@ -154,3 +167,8 @@ node tools/build-precache.mjs
 node tests/rounder.test.mjs     # fillet volume matches the analytic answer
 node tests/e2e.mjs              # real-browser check (needs Playwright); serve the repo on :8123 first
 ```
+
+## Credits
+
+- Default desktop wallpaper: **"Longhorn Bliss"** by [yethzart](https://www.deviantart.com/yethzart), from stock photos via sxc.hu. Licensed [CC BY-NC-ND 3.0](https://creativecommons.org/licenses/by-nc-nd/3.0/): included unmodified, with credit, for non-commercial use only. If Meshtype ever goes commercial, swap it out. Set your own under Sky ▾ → Desktop wallpaper.
+- Libraries: see `vendor/README.md`.
