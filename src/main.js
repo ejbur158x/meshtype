@@ -1,4 +1,4 @@
-// Meshtype v0.5.1
+// Meshtype v0.5.2
 // A small browser mesh editor: squircle primitives, union / negate / split,
 // edge rounding, SVG extrusion, GLB export.
 
@@ -14,7 +14,7 @@ import { inspectSvg, makeSvgGeometry } from './svg.js';
 import { roundMesh, boxUVs } from './rounder.js';
 import { FLOORS, floorMaterial } from './floor.js';
 
-const VERSION = '0.5.1';
+const VERSION = '0.5.2';
 const STORE_KEY = 'meshtype.autosave';
 
 const PRESETS = {
@@ -2038,6 +2038,68 @@ function alignTarget(us, a) {
   return vals.reduce((s, v) => s + v, 0) / vals.length;
 }
 
+/* --- mirror + distribute --- */
+
+/**
+ * Mirror the selection across its own center along a world axis. Shapes here are
+ * symmetric in their local axes, so a mirror is a move plus the rotation M·R·M;
+ * a curved wall flips its bend when the mirror runs across its thickness.
+ */
+function doMirror(axis) {
+  const i = 'xyz'.indexOf(axis);
+  const leaves = selLeaves().filter((o) => o.visible);
+  if (!leaves.length) return toast('Select something to mirror.');
+  const c = boxOf(leaves).getCenter(new THREE.Vector3());
+  const M = new THREE.Matrix4().makeScale(i === 0 ? -1 : 1, i === 1 ? -1 : 1, i === 2 ? -1 : 1);
+  const q = new THREE.Quaternion();
+  const eu = new THREE.Euler();
+  const R = new THREE.Matrix4();
+  let skipped = 0;
+  for (const o of leaves) {
+    R.makeRotationFromEuler(new THREE.Euler(deg2rad(o.rot[0]), deg2rad(o.rot[1]), deg2rad(o.rot[2]), 'XYZ'));
+    // which local axis the world mirror lands on
+    const local = new THREE.Vector3().setComponent(i, 1).applyMatrix4(R.clone().invert());
+    const ax = [Math.abs(local.x), Math.abs(local.y), Math.abs(local.z)];
+    const li = ax.indexOf(Math.max(...ax));
+    if (o.type === 'svg' && li !== 2) {
+      skipped++;
+      continue;
+    }
+    const p = o.pos.slice();
+    p[i] = round(2 * c.getComponent(i) - p[i]);
+    o.pos = p;
+    const MRM = M.clone().multiply(R).multiply(M);
+    q.setFromRotationMatrix(MRM);
+    eu.setFromQuaternion(q, 'XYZ');
+    o.rot = [round(rad2deg(eu.x), 2), round(rad2deg(eu.y), 2), round(rad2deg(eu.z), 2)].map((v) => (Math.abs(v) < 1e-3 ? 0 : v));
+    if (o.type === 'box' && o.params && o.params.bend && li === 2) o.params.bend = -o.params.bend;
+  }
+  afterEdit();
+  if (skipped) toast(`${skipped} SVG part${skipped === 1 ? '' : 's'} skipped: SVGs can only mirror across their thickness.`);
+}
+
+/** Even gaps between the selected things along a world axis; the two outermost stay put. */
+function doDistribute(axis) {
+  const us = alignUnits();
+  if (us.length < 3) return toast('Select three or more things to distribute.');
+  us.sort((a, b) => a.box.getCenter(new THREE.Vector3())[axis] - b.box.getCenter(new THREE.Vector3())[axis]);
+  const first = us[0].box;
+  const last = us[us.length - 1].box;
+  const span = last.max[axis] - first.min[axis];
+  const total = us.reduce((s, u) => s + (u.box.max[axis] - u.box.min[axis]), 0);
+  const gap = (span - total) / (us.length - 1);
+  let cursor = first.max[axis] + gap;
+  for (let k = 1; k < us.length - 1; k++) {
+    const u = us[k];
+    const d = new THREE.Vector3();
+    d[axis] = cursor - u.box.min[axis];
+    shiftLeaves(u.leaves, d);
+    cursor += u.box.max[axis] - u.box.min[axis] + gap;
+  }
+  afterEdit();
+  toast(gap < 0 ? `Distributed with ${(-gap).toFixed(2)} m overlap each (not enough room for gaps).` : `Distributed: ${gap.toFixed(2)} m gaps along ${axis.toUpperCase()}.`);
+}
+
 function doAlign() {
   const a = view.align;
   if (!a.axis) return toast('Pick an axis first (X, Y or Z). The blue plane shows where things will land.');
@@ -2192,7 +2254,11 @@ function arrangeHTML() {
     <select id="al-edge" aria-label="Which edge">${opt('min', a.edge, 'Min edge')}${opt('center', a.edge, 'Center')}${opt('max', a.edge, 'Max edge')}</select>
     <select id="al-target" aria-label="Align to">${opt('avg', a.target, 'to Average')}${opt('active', a.target, 'to Active')}${opt('min', a.target, 'to Lowest')}${opt('max', a.target, 'to Highest')}${opt('world', a.target, 'to World 0')}</select>
   </div>
-  <button type="button" class="wide" data-act="align">Align</button></div>`;
+  <button type="button" class="wide" data-act="align">Align</button></div>
+<div class="field"><span class="lbl">Mirror across the selection's center</span>
+  <div class="seg axis">${['x', 'y', 'z'].map((ax) => `<button type="button" data-act="mirror:${ax}">${ax.toUpperCase()}</button>`).join('')}</div></div>
+<div class="field"><span class="lbl">Distribute evenly <span class="sub">(3+ things, ends stay put)</span></span>
+  <div class="seg axis">${['x', 'y', 'z'].map((ax) => `<button type="button" data-act="dist:${ax}">${ax.toUpperCase()}</button>`).join('')}</div></div>`;
 }
 
 function roundHTML(n) {
@@ -2568,6 +2634,8 @@ function runAction(a) {
   else if (a === 'del') deleteSelection();
   else if (a === 'center') doCenter();
   else if (a === 'align') doAlign();
+  else if (a.startsWith('mirror:')) doMirror(a.slice(7));
+  else if (a.startsWith('dist:')) doDistribute(a.slice(5));
   else if (a === 'split') doSplit();
   else if (a === 'union') doUnion('union');
   else if (a === 'int') doUnion('int');
@@ -3368,6 +3436,10 @@ function menuItems() {
     { label: 'Align X…', act: 'axis:x', disabled: tops.length < 1 },
     { label: 'Align Y…', act: 'axis:y', disabled: tops.length < 1 },
     { label: 'Align Z…', act: 'axis:z', disabled: tops.length < 1 },
+    { label: 'Mirror X', act: 'mirror:x' },
+    { label: 'Mirror Z', act: 'mirror:z' },
+    { label: 'Distribute X', act: 'dist:x', disabled: tops.length < 3 },
+    { label: 'Distribute Z', act: 'dist:z', disabled: tops.length < 3 },
     { sep: true },
     { label: 'Copy', key: 'Ctrl+C', act: 'copy' },
     { label: 'Cut', key: 'Ctrl+X', act: 'cut' },
@@ -3432,6 +3504,12 @@ window.addEventListener('keydown', (e) => {
   const typing = isTyping(e.target);
   const mod = e.ctrlKey || e.metaKey;
   const k = e.key.toLowerCase();
+  if (mod && k === 'r' && !e.shiftKey) {
+    // Ctrl+R would reload and throw away an unsaved drag; Ctrl+Shift+R still reloads
+    e.preventDefault();
+    toast('Ctrl+R is off so you do not reload by accident. Ctrl+Shift+R still refreshes.');
+    return;
+  }
   if (mod && !typing && k === 'z') {
     e.preventDefault();
     if (e.shiftKey) redo();

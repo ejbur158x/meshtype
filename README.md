@@ -1,6 +1,6 @@
 # Meshtype
 
-**v0.5.1.** A tiny browser mesh editor for squircles and glossy Frutiger Aero shapes. Solid and cutter parts, UNION / NEGATE / SPLIT, edge rounding, SVG extrusion, multi-select, and GLB export. No build step. Installable as an app and works offline.
+**v0.5.2.** A tiny browser mesh editor for squircles and glossy Frutiger Aero shapes. Solid and cutter parts, UNION / NEGATE / SPLIT, edge rounding, SVG extrusion, multi-select, and GLB export. No build step. Installable as an app and works offline.
 
 Made because Blender is overkill when all you need is a rounded panel with a dent in it.
 
@@ -102,6 +102,7 @@ With several things selected the gizmo moves them together.
 | `Esc` | Deselect |
 | `Delete` | Delete the selection |
 | `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
+| `Ctrl+R` | Disabled, so you don't reload by accident (`Ctrl+Shift+R` still refreshes) |
 
 ## Scaling, turning and axes
 
@@ -127,6 +128,8 @@ In Floor mode, floors keep the arrow gizmo; hold Ctrl while scaling a floor to p
 In the right panel under **Arrange**:
 
 - **Center** moves the selection so its middle sits at world 0. Untick X, Y or Z to leave an axis alone.
+- **Mirror X / Y / Z** flips the selection across its own center. A curved wall mirrored across its thickness flips its curve. SVG parts can only mirror across their thickness.
+- **Distribute X / Y / Z** (3+ things) spaces them with equal gaps; the two outermost stay put.
 - **Align**: click X, Y or Z and a blue plane shows where things will land. Choose which edge to align (Min, Center, Max) and what to align to (Average, the Active (last picked) item, Lowest, Highest, or World 0), then press Align. A union moves as one thing.
 
 ## Round edges
@@ -196,7 +199,7 @@ The service worker caches the whole app. After you edit any file, regenerate the
 node tools/build-precache.mjs
 ```
 
-## Known limits (v0.5.1)
+## Known limits (v0.5.2)
 
 - Booleans are live, so keep Detail at 2 or 3 on dense scenes.
 - Scaling a rotated part from a multi-selection gizmo can introduce shear, which Meshtype can't store. Use Scale on single parts for that.
