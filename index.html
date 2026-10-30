@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meshtype</title>
+<meta name="description" content="A tiny browser mesh editor for squircles and glossy Aero shapes, with boolean union, subtract and intersect, and GLB export.">
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three/three.module.js",
+    "three/addons/": "./vendor/three/addons/",
+    "three-mesh-bvh": "./vendor/three-mesh-bvh.module.js",
+    "three-bvh-csg": "./vendor/three-bvh-csg.module.js"
+  }
+}
+</script>
+</head>
+<body>
+<header class="bar">
+  <div class="brand">
+    <span class="logo" aria-hidden="true"></span>
+    <span class="word">Meshtype</span>
+    <span class="ver">v0.1.0</span>
+  </div>
+  <input id="project-name" class="proj" type="text" value="untitled" maxlength="60" aria-label="Project name" spellcheck="false">
+  <div class="spacer"></div>
+  <div class="grp">
+    <button id="btn-undo" type="button" title="Undo (Ctrl+Z)">Undo</button>
+    <button id="btn-redo" type="button" title="Redo (Ctrl+Y)">Redo</button>
+  </div>
+  <div class="grp">
+    <button id="btn-open" type="button" title="Open a .meshtype.json project">Open</button>
+    <button id="btn-save" type="button" title="Save project as .meshtype.json">Save</button>
+  </div>
+  <label class="chk" title="Export plain white geometry and skip the Aero materials"><input id="chk-strip" type="checkbox"> Geometry only</label>
+  <div class="grp">
+    <button id="btn-obj" type="button">OBJ</button>
+    <button id="btn-glb" type="button" class="primary">Export GLB</button>
+  </div>
+  <input id="file-open" type="file" accept=".json,application/json" hidden>
+</header>
+
+<main class="app">
+  <aside class="panel left" aria-label="Shapes and layers">
+    <h2>Add shape</h2>
+    <div class="adds">
+      <button type="button" data-add="block">Block</button>
+      <button type="button" data-add="panel">Panel</button>
+      <button type="button" data-add="disc">Disc</button>
+      <button type="button" data-add="orb">Orb</button>
+      <button type="button" data-add="pill">Pill</button>
+    </div>
+    <h2>Layers <span class="sub">top to bottom</span></h2>
+    <ul id="list" class="list"></ul>
+    <p class="note">Booleans run in list order. A Subtract or Intersect layer cuts everything above it. The cut faces take the material of the layer doing the cutting.</p>
+  </aside>
+
+  <section class="stage" id="stage">
+    <canvas id="view" aria-label="3D viewport"></canvas>
+    <div class="tools" role="toolbar" aria-label="Viewport tools">
+      <div class="seg">
+        <button type="button" data-mode="translate" title="Move (W)" aria-pressed="true">Move</button>
+        <button type="button" data-mode="rotate" title="Rotate (E)" aria-pressed="false">Rotate</button>
+        <button type="button" data-mode="scale" title="Scale (R)" aria-pressed="false">Scale</button>
+      </div>
+      <label class="chk"><input id="chk-snap" type="checkbox" checked> Snap</label>
+      <label class="chk"><input id="chk-result" type="checkbox" checked> Result</label>
+      <label class="chk"><input id="chk-cages" type="checkbox"> Cages</label>
+      <label class="chk"><input id="chk-sky" type="checkbox" checked> Sky</label>
+    </div>
+    <div id="empty" class="empty" hidden>Add a shape to start.</div>
+    <div id="stats" class="stats"></div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </section>
+
+  <aside class="panel right" id="inspector" aria-label="Inspector"></aside>
+</main>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
