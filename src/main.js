@@ -1,4 +1,4 @@
-// Meshtype v0.5.0
+// Meshtype v0.5.1
 // A small browser mesh editor: squircle primitives, union / negate / split,
 // edge rounding, SVG extrusion, GLB export.
 
@@ -14,7 +14,7 @@ import { inspectSvg, makeSvgGeometry } from './svg.js';
 import { roundMesh, boxUVs } from './rounder.js';
 import { FLOORS, floorMaterial } from './floor.js';
 
-const VERSION = '0.5.0';
+const VERSION = '0.5.1';
 const STORE_KEY = 'meshtype.autosave';
 
 const PRESETS = {

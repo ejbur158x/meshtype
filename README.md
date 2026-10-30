@@ -1,6 +1,6 @@
 # Meshtype
 
-**v0.5.0.** A tiny browser mesh editor for squircles and glossy Frutiger Aero shapes. Solid and cutter parts, UNION / NEGATE / SPLIT, edge rounding, SVG extrusion, multi-select, and GLB export. No build step. Installable as an app and works offline.
+**v0.5.1.** A tiny browser mesh editor for squircles and glossy Frutiger Aero shapes. Solid and cutter parts, UNION / NEGATE / SPLIT, edge rounding, SVG extrusion, multi-select, and GLB export. No build step. Installable as an app and works offline.
 
 Made because Blender is overkill when all you need is a rounded panel with a dent in it.
 
@@ -196,7 +196,7 @@ The service worker caches the whole app. After you edit any file, regenerate the
 node tools/build-precache.mjs
 ```
 
-## Known limits (v0.5.0)
+## Known limits (v0.5.1)
 
 - Booleans are live, so keep Detail at 2 or 3 on dense scenes.
 - Scaling a rotated part from a multi-selection gizmo can introduce shear, which Meshtype can't store. Use Scale on single parts for that.
