@@ -24,6 +24,8 @@ export const SHAPES = {
     defaults: { nPlan: 4, nProf: 4, detail: 2 },
     limits: { nPlan: [2, 20], nProf: [2, 20], detail: [1, 4] },
   },
+  // sharp unit cube: 12 triangles, flat normals
+  box: { defaults: {}, limits: {} },
   pill: {
     defaults: { radius: 0.25, length: 0.5, detail: 2 },
     limits: { radius: [0.05, 0.5], length: [0, 2], detail: [1, 4] },
@@ -206,6 +208,11 @@ function pill({ radius, length, detail }) {
 }
 
 export function makeGeometry(type, params) {
+  if (type === 'box') {
+    const g = new THREE.BoxGeometry(1, 1, 1);
+    g.clearGroups(); // one material per part; face groups would confuse the booleans
+    return g;
+  }
   if (type === 'pill') return pill(params);
   return superellipsoid(params);
 }

@@ -1,4 +1,4 @@
-// Meshtype v0.4.0
+// Meshtype v0.5.0
 // A small browser mesh editor: squircle primitives, union / negate / split,
 // edge rounding, SVG extrusion, GLB export.
 
@@ -14,10 +14,12 @@ import { inspectSvg, makeSvgGeometry } from './svg.js';
 import { roundMesh, boxUVs } from './rounder.js';
 import { FLOORS, floorMaterial } from './floor.js';
 
-const VERSION = '0.4.0';
+const VERSION = '0.5.0';
 const STORE_KEY = 'meshtype.autosave';
 
 const PRESETS = {
+  box: { label: 'Box', type: 'box', params: {}, scl: [1, 1, 1], onFloor: true },
+  wall: { label: 'Wall', type: 'box', params: {}, scl: [4, 3, 0.2], onFloor: true },
   block: { label: 'Block', type: 'squircle', params: { nPlan: 4, nProf: 4, detail: 2 }, scl: [1, 1, 1] },
   panel: { label: 'Panel', type: 'squircle', params: { nPlan: 5, nProf: 10, detail: 2 }, scl: [2, 0.14, 1.4] },
   disc: { label: 'Disc', type: 'squircle', params: { nPlan: 2, nProf: 10, detail: 2 }, scl: [1, 0.2, 1] },
@@ -36,6 +38,7 @@ const SHAPE_UI = {
     ['length', 'Body length', 0, 2, 0.01],
     ['detail', 'Detail', 1, 4, 1],
   ],
+  box: [],
   svg: [
     ['depth', 'Extrude depth', 0.02, 2, 0.01],
     ['detail', 'Curve detail', 1, 4, 1],
@@ -163,6 +166,8 @@ function sanitizeFloors(data, nextId) {
 let state = { name: 'untitled', nodes: [], assets: {}, sel: [], active: null, nextId: 1, floor: sanitizeFloor(), floors: [] };
 const view = {
   mode: 'translate',
+  space: 'world',
+  scaleFrom: 'edge',
   floorMode: false,
   floorSel: null,
   snap: true,
@@ -241,7 +246,7 @@ function sanitizePart(raw) {
     if (!Number.isFinite(v)) v = defs[k];
     params[k] = clamp(v, lims[k][0], lims[k][1]);
   }
-  params.detail = Math.round(params.detail);
+  if ('detail' in params) params.detail = Math.round(params.detail);
   const vec = (a, fallback, min) =>
     Array.isArray(a) && a.length === 3 && a.every((v) => Number.isFinite(v))
       ? a.map((v) => (min === undefined ? v : Math.max(min, v)))
@@ -1010,6 +1015,10 @@ function recenterPivot() {
   const c = boxOf(lv).getCenter(new THREE.Vector3());
   pivot.position.copy(c);
   pivot.quaternion.identity();
+  if (view.space === 'local') {
+    const ref = lv.find((o) => o.id === state.active) || lv[0];
+    pivot.quaternion.setFromEuler(new THREE.Euler(deg2rad(ref.rot[0]), deg2rad(ref.rot[1]), deg2rad(ref.rot[2]), 'XYZ'));
+  }
   pivot.scale.set(1, 1, 1);
   pivot.updateMatrix();
 }
@@ -1018,19 +1027,19 @@ function attachGizmo() {
   if (view.floorMode) return attachFloorGizmo();
   transform.showX = transform.showY = transform.showZ = true;
   const lv = selLeaves().filter((o) => o.visible);
-  if (!lv.length) {
+  // Scale mode uses the Tinkercad-style box instead of the arrows
+  if (!lv.length || view.mode === 'scale') {
     transform.detach();
     return;
   }
   const single = liveSel().length === 1 && lv.length === 1 && !isGroup(node(liveSel()[0]));
   if (single) {
     transform.attach(lv[0].kind === 'light' ? lrt.get(lv[0].id).holder : rt.get(lv[0].id).proxy);
-    transform.setSpace(view.mode === 'scale' ? 'local' : 'world');
   } else {
     recenterPivot();
     transform.attach(pivot);
-    transform.setSpace('world');
   }
+  transform.setSpace(view.space);
 }
 
 let dragStart = null;
@@ -1706,7 +1715,8 @@ function addObject(presetId) {
   const p = PRESETS[presetId];
   if (!p) return;
   const id = state.nextId;
-  const o = newPart({ name: `${p.label} ${id}`, type: p.type, params: p.params, scl: p.scl, mat: 'glass' });
+  const pos = p.onFloor ? [0, p.scl[1] / 2, 0] : [0, 0, 0];
+  const o = newPart({ name: `${p.label} ${id}`, type: p.type, params: p.params, scl: p.scl, pos, mat: p.type === 'box' ? 'matte' : 'glass', color: p.type === 'box' ? '#e6ebf0' : undefined });
   state.sel = [o.id];
   state.active = o.id;
   afterEdit();
@@ -1773,6 +1783,111 @@ function duplicateSelection() {
   state.sel = copies;
   state.active = copies[copies.length - 1];
   afterEdit();
+}
+
+/* ------------------------------------------------------------------ */
+/* clipboard: Ctrl+C / Ctrl+X / Ctrl+V                                 */
+/* Kept in local storage too, so it pastes across tabs and projects.   */
+/* ------------------------------------------------------------------ */
+
+const CLIP_KEY = 'meshtype.clipboard';
+let clip = null;
+let clipPastes = 0;
+
+function readClip() {
+  if (clip) return clip;
+  try {
+    const raw = localStorage.getItem(CLIP_KEY);
+    if (raw) clip = JSON.parse(raw);
+  } catch (e) {
+    clip = null;
+  }
+  return clip;
+}
+
+function writeClip(c) {
+  clip = c;
+  clipPastes = 0;
+  try {
+    localStorage.setItem(CLIP_KEY, JSON.stringify(c));
+  } catch (e) {
+    /* too big for storage: still pastes in this tab */
+  }
+}
+
+function copySelection(cut = false) {
+  if (view.floorMode) {
+    const f = floorById(view.floorSel);
+    if (!f) return toast('Pick a floor to copy.');
+    writeClip({ kind: 'floors', floors: [JSON.parse(JSON.stringify(f))], cut });
+    if (cut) deleteFloor(f.id);
+    toast(cut ? 'Cut 1 floor' : 'Copied 1 floor');
+    return;
+  }
+  const tops = uniqueTops();
+  if (!tops.length) return toast('Select something to copy.');
+  const nodes = [];
+  for (const t of tops) for (const id of descendantIds(t.id)) nodes.push(JSON.parse(JSON.stringify(node(id))));
+  const assets = {};
+  for (const n of nodes) {
+    for (const k of [n.asset, n.tex]) if (k && state.assets[k]) assets[k] = state.assets[k];
+  }
+  writeClip({ kind: 'nodes', nodes, assets, cut });
+  if (cut) {
+    transform.detach();
+    removeNodes(tops.map((t) => t.id));
+    afterEdit();
+  }
+  toast(`${cut ? 'Cut' : 'Copied'} ${tops.length} item${tops.length === 1 ? '' : 's'}`);
+}
+
+function pasteClipboard() {
+  const c = readClip();
+  if (!c) return toast('Nothing copied yet.');
+  // pastes land exactly on top of the original; nudge them off with the gizmo arrows
+  const off = 0;
+  clipPastes++;
+  if (c.kind === 'floors') {
+    for (const raw of c.floors || []) {
+      const f = sanitizeFloorItem({ ...raw, id: state.nextId++ });
+      f.pos = [round(f.pos[0] + off), f.pos[1], round(f.pos[2] + off)];
+      state.floors.push(f);
+      if (!view.floorMode) setFloorMode(true);
+      selectFloor(f.id);
+    }
+    syncFloors();
+    commit();
+    toast('Pasted floor');
+    return;
+  }
+  if (view.floorMode) setFloorMode(false);
+  const ids = new Map();
+  for (const n of c.nodes || []) ids.set(n.id, state.nextId++);
+  // bring images / SVGs along; rename if this project already uses the key for something else
+  const assetMap = new Map();
+  for (const [k, v] of Object.entries(c.assets || {})) {
+    let key = k;
+    if (state.assets[key] && state.assets[key] !== v) key = `${k}-${state.nextId++}`;
+    state.assets[key] = v;
+    assetMap.set(k, key);
+  }
+  const added = [];
+  for (const raw of c.nodes || []) {
+    const r = { ...raw, id: ids.get(raw.id), parent: ids.has(raw.parent) ? ids.get(raw.parent) : null };
+    if (r.asset) r.asset = assetMap.get(r.asset) || r.asset;
+    if (r.tex) r.tex = assetMap.get(r.tex) || r.tex;
+    const n = r.kind === 'group' ? sanitizeGroup(r) : r.kind === 'light' ? sanitizeLight(r) : sanitizePart(r);
+    if (!n) continue;
+    if (n.kind !== 'group') n.pos = [round(n.pos[0] + off), n.pos[1], round(n.pos[2] + off)];
+    if (n.parent != null) delete n.round;
+    state.nodes.push(n);
+    added.push(n);
+  }
+  const tops = added.filter((n) => n.parent == null).map((n) => n.id);
+  state.sel = tops;
+  state.active = tops[tops.length - 1] ?? null;
+  afterEdit();
+  toast(`Pasted ${tops.length} item${tops.length === 1 ? '' : 's'}`);
 }
 
 function toggleVisible(id) {
@@ -2191,7 +2306,12 @@ ${arrangeHTML()}
     return;
   }
   const sliders = SHAPE_UI[n.type].map((s) => sliderHTML(n, s)).join('');
-  const tip = n.type === 'squircle' ? '<p class="tip">n = 2 is round, n = 4 is a classic squircle, higher gets boxier.</p>' : '';
+  const tip =
+    n.type === 'squircle'
+      ? '<p class="tip">n = 2 is round, n = 4 is a classic squircle, higher gets boxier.</p>'
+      : n.type === 'box'
+        ? '<p class="tip">Sharp box: 12 triangles, perfect corners. Use it for walls, floors and room shells you never see the edges of. Size it with Scale (3).</p>'
+        : '';
   el.inspector.innerHTML = `${head}
 <h2>Shape</h2>
 ${sliders}${tip}
@@ -2462,6 +2582,9 @@ function runAction(a) {
   } else if (a === 'svg') el.fileSvg.click();
   else if (a === 'tex') el.fileTex.click();
   else if (a === 'tag') addTagFromInput();
+  else if (a === 'copy') copySelection(false);
+  else if (a === 'cut') copySelection(true);
+  else if (a === 'paste') pasteClipboard();
   else if (a === 'light:point') addLight('point');
   else if (a === 'light:spot') addLight('spot');
   else if (a === 'tex-clear') {
@@ -2490,11 +2613,280 @@ el.name.addEventListener('change', commit);
 
 /* viewport toolbar */
 
+/* ------------------------------------------------------------------ */
+/* Tinkercad-style scale box: drag a handle, the opposite side stays   */
+/* planted (or scale evenly from the center).                          */
+/* ------------------------------------------------------------------ */
+
+const sbox = {
+  group: new THREE.Group(),
+  outline: null,
+  handles: [],
+  frame: null, // { O, Q, min, max, single }
+  drag: null,
+};
+sbox.group.visible = false;
+sbox.group.renderOrder = 20;
+scene.add(sbox.group);
+{
+  const edges = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
+  sbox.outline = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x18a0ff, depthTest: false, transparent: true, opacity: 0.9 }));
+  sbox.outline.renderOrder = 20;
+  sbox.group.add(sbox.outline);
+  const white = new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false });
+  const dark = new THREE.MeshBasicMaterial({ color: 0x1d2a36, depthTest: false });
+  const rim = new THREE.LineBasicMaterial({ color: 0x1d2a36, depthTest: false });
+  const cube = new THREE.BoxGeometry(1, 1, 1);
+  const cubeEdges = new THREE.EdgesGeometry(cube);
+  // p = position on the box in -1..1 units, d = which axes the handle scales (sign = side)
+  const defs = [];
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) defs.push({ p: [sx, -1, sz], d: [sx, 0, sz], corner: true });
+  for (const s of [-1, 1]) {
+    defs.push({ p: [s, -1, 0], d: [s, 0, 0] });
+    defs.push({ p: [0, -1, s], d: [0, 0, s] });
+  }
+  defs.push({ p: [0, 1, 0], d: [0, 1, 0], top: true });
+  for (const def of defs) {
+    const m = new THREE.Mesh(cube, def.corner || def.top ? white : dark);
+    m.renderOrder = 21;
+    m.userData.handle = def;
+    if (def.corner || def.top) {
+      const e = new THREE.LineSegments(cubeEdges, rim);
+      e.renderOrder = 22;
+      m.add(e);
+    }
+    sbox.group.add(m);
+    sbox.handles.push(m);
+  }
+}
+
+/** The box we scale: the object's own oriented box for one part, the world box for several things. */
+function scaleFrame() {
+  const sel = liveSel();
+  const lv = selLeaves().filter((o) => o.visible);
+  if (!lv.length) return null;
+  const single = sel.length === 1 && lv.length === 1 && lv[0].kind === 'part' && !isGroup(node(sel[0]));
+  if (single) {
+    const o = lv[0];
+    const r = rt.get(o.id);
+    if (!r || !r.geo || !r.geo.attributes.position || !r.geo.attributes.position.count) return null;
+    if (!r.geo.boundingBox) r.geo.computeBoundingBox();
+    const s = new THREE.Vector3().fromArray(o.scl);
+    const min = r.geo.boundingBox.min.clone().multiply(s);
+    const max = r.geo.boundingBox.max.clone().multiply(s);
+    const Q = new THREE.Quaternion().setFromEuler(new THREE.Euler(deg2rad(o.rot[0]), deg2rad(o.rot[1]), deg2rad(o.rot[2]), 'XYZ'));
+    return { O: new THREE.Vector3().fromArray(o.pos), Q, min, max, single: o, geoMin: r.geo.boundingBox.min.clone(), geoMax: r.geo.boundingBox.max.clone() };
+  }
+  const b = boxOf(lv);
+  if (b.isEmpty()) return null;
+  return { O: new THREE.Vector3(), Q: new THREE.Quaternion(), min: b.min.clone(), max: b.max.clone(), single: null };
+}
+
+function updateScaleBox() {
+  const show = view.mode === 'scale' && !view.floorMode && liveSel().length > 0;
+  const f = show ? (sbox.drag ? sbox.drag.live || sbox.drag.frame : scaleFrame()) : null;
+  sbox.group.visible = !!f;
+  if (!f) return;
+  sbox.frame = f;
+  sbox.group.position.copy(f.O);
+  sbox.group.quaternion.copy(f.Q);
+  const size = f.max.clone().sub(f.min);
+  const c = f.min.clone().add(f.max).multiplyScalar(0.5);
+  sbox.outline.position.copy(c);
+  sbox.outline.scale.set(Math.max(size.x, 1e-4), Math.max(size.y, 1e-4), Math.max(size.z, 1e-4));
+  const wp = new THREE.Vector3();
+  for (const h of sbox.handles) {
+    const p = h.userData.handle.p;
+    h.position.set(c.x + (p[0] * size.x) / 2, c.y + (p[1] * size.y) / 2, c.z + (p[2] * size.z) / 2);
+    h.getWorldPosition(wp);
+    const k = wp.distanceTo(camera.position) * (h.userData.handle.corner || h.userData.handle.top ? 0.016 : 0.012);
+    h.scale.setScalar(k);
+  }
+}
+
+function pickHandle(clientX, clientY) {
+  if (!sbox.group.visible) return null;
+  const rect = el.canvas.getBoundingClientRect();
+  const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  sbox.group.updateMatrixWorld(true);
+  const hit = raycaster.intersectObjects(sbox.handles, false)[0];
+  return hit ? hit.object : null;
+}
+
+function beginBoxScale(handle, e) {
+  const f = scaleFrame();
+  if (!f) return false;
+  const def = handle.userData.handle;
+  const hp = new THREE.Vector3();
+  handle.getWorldPosition(hp);
+  const axisY = new THREE.Vector3(0, 1, 0).applyQuaternion(f.Q);
+  const plane = new THREE.Plane();
+  if (def.d[1]) {
+    // height handle: a plane through the box's up axis, facing the camera
+    const toCam = camera.position.clone().sub(hp);
+    const n = toCam.sub(axisY.clone().multiplyScalar(toCam.dot(axisY))).normalize();
+    plane.setFromNormalAndCoplanarPoint(n.lengthSq() ? n : new THREE.Vector3(0, 0, 1), hp);
+  } else plane.setFromNormalAndCoplanarPoint(axisY, hp);
+  sbox.drag = {
+    def,
+    frame: f,
+    live: null,
+    plane,
+    leaves: selLeaves().map((o) => ({ o, m: worldMatrixOf(o), scl: o.scl.slice() })),
+    pointerId: e.pointerId,
+  };
+  return true;
+}
+
+function boxScaleMove(e) {
+  const d = sbox.drag;
+  const rect = el.canvas.getBoundingClientRect();
+  const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  const hit = new THREE.Vector3();
+  if (!raycaster.ray.intersectPlane(d.plane, hit)) return;
+  const f = d.frame;
+  const local = hit.sub(f.O).applyQuaternion(f.Q.clone().invert());
+  const fromCenter = (view.scaleFrom === 'center') !== e.altKey;
+  const g = view.snap ? state.floor.grid : 0;
+  const minSize = Math.max(0.02, g);
+  const F = new THREE.Vector3(1, 1, 1);
+  const P = new THREE.Vector3();
+  const nmin = f.min.clone();
+  const nmax = f.max.clone();
+  const axes = [];
+  for (let a = 0; a < 3; a++) {
+    const s = d.def.d[a];
+    const lo = f.min.getComponent(a);
+    const hi = f.max.getComponent(a);
+    const c = (lo + hi) / 2;
+    if (!s) {
+      P.setComponent(a, fromCenter ? c : lo);
+      continue;
+    }
+    axes.push(a);
+    let size = fromCenter ? 2 * Math.abs(local.getComponent(a) - c) : (local.getComponent(a) - (s > 0 ? lo : hi)) * s;
+    if (g) size = Math.round(size / g) * g;
+    size = Math.max(minSize, size);
+    F.setComponent(a, size / Math.max(hi - lo, 1e-6));
+    P.setComponent(a, fromCenter ? c : s > 0 ? lo : hi);
+  }
+  if (e.shiftKey && axes.length) {
+    // Shift: keep proportions (all three axes scale together; the bottom stays on the floor)
+    const k = Math.max(...axes.map((a) => F.getComponent(a)));
+    F.set(k, k, k);
+    if (!fromCenter) P.y = f.min.y;
+  }
+  for (let a = 0; a < 3; a++) {
+    const p = P.getComponent(a);
+    nmin.setComponent(a, p + (f.min.getComponent(a) - p) * F.getComponent(a));
+    nmax.setComponent(a, p + (f.max.getComponent(a) - p) * F.getComponent(a));
+  }
+  d.live = { ...f, min: nmin, max: nmax };
+  // frame-space scale about P, carried into world space
+  const toFrame = new THREE.Matrix4().compose(f.O, f.Q, new THREE.Vector3(1, 1, 1));
+  const W = toFrame
+    .clone()
+    .multiply(new THREE.Matrix4().makeTranslation(P.x, P.y, P.z))
+    .multiply(new THREE.Matrix4().makeScale(F.x, F.y, F.z))
+    .multiply(new THREE.Matrix4().makeTranslation(-P.x, -P.y, -P.z))
+    .multiply(toFrame.clone().invert());
+  const p = new THREE.Vector3();
+  const q = new THREE.Quaternion();
+  const sc = new THREE.Vector3();
+  const eu = new THREE.Euler();
+  for (const { o, m, scl } of d.leaves) {
+    if (f.single) {
+      // one part in its own frame: pure scale, no shear
+      p.fromArray(o.pos);
+      p.copy(new THREE.Vector3().setFromMatrixPosition(m)).applyMatrix4(W);
+      o.pos = [round(p.x), round(p.y), round(p.z)];
+      o.scl = [round(scl[0] * F.x), round(scl[1] * F.y), round(scl[2] * F.z)].map((v) => Math.max(0.01, v));
+    } else {
+      W.clone().multiply(m).decompose(p, q, sc);
+      o.pos = [round(p.x), round(p.y), round(p.z)];
+      if (o.kind !== 'light') {
+        eu.setFromQuaternion(q, 'XYZ');
+        o.rot = [round(rad2deg(eu.x), 2), round(rad2deg(eu.y), 2), round(rad2deg(eu.z), 2)];
+        o.scl = [round(Math.max(0.01, sc.x)), round(Math.max(0.01, sc.y)), round(Math.max(0.01, sc.z))];
+      }
+    }
+    syncNode(o);
+  }
+  requestSolve();
+  planeDirty = true;
+  const sz = nmax.clone().sub(nmin);
+  const hint = $('#hint');
+  if (hint) hint.textContent = `W ${sz.x.toFixed(2)} × H ${sz.y.toFixed(2)} × D ${sz.z.toFixed(2)} m · scaling from ${fromCenter ? 'the center' : 'the planted side'}${e.shiftKey ? ' · proportional' : ''}`;
+  if (f.single) updateXformFields(f.single);
+}
+
+function endBoxScale() {
+  sbox.drag = null;
+  const hint = $('#hint');
+  if (hint) hint.textContent = 'WASD fly · Q down · E up · Shift fine · Ctrl fast · right-click for the menu';
+  commit();
+  renderInspector();
+}
+
+/* ---- R / T: quarter turns around Y / Z, in world or local axes ---- */
+
+function quarterTurn(axisName) {
+  if (view.floorMode) {
+    const f = floorById(view.floorSel);
+    if (f && axisName === 'y') {
+      f.rotY = (((f.rotY + 90) % 360) + 360) % 360;
+      syncFloors();
+      attachFloorGizmo();
+      commit();
+      renderInspector();
+    }
+    return;
+  }
+  const leaves = selLeaves().filter((o) => o.visible);
+  if (!leaves.length) return;
+  const c = boxOf(leaves).getCenter(new THREE.Vector3());
+  const axis = axisName === 'y' ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
+  if (view.space === 'local') {
+    const ref = leaves.find((o) => o.id === state.active) || leaves[0];
+    axis.applyQuaternion(new THREE.Quaternion().setFromEuler(new THREE.Euler(deg2rad(ref.rot[0]), deg2rad(ref.rot[1]), deg2rad(ref.rot[2]), 'XYZ')));
+  }
+  const R = new THREE.Matrix4()
+    .makeTranslation(c.x, c.y, c.z)
+    .multiply(new THREE.Matrix4().makeRotationAxis(axis.normalize(), Math.PI / 2))
+    .multiply(new THREE.Matrix4().makeTranslation(-c.x, -c.y, -c.z));
+  const p = new THREE.Vector3();
+  const q = new THREE.Quaternion();
+  const s = new THREE.Vector3();
+  const eu = new THREE.Euler();
+  for (const o of leaves) {
+    R.clone().multiply(worldMatrixOf(o)).decompose(p, q, s);
+    eu.setFromQuaternion(q, 'XYZ');
+    o.pos = [round(p.x), round(p.y), round(p.z)];
+    o.rot = [round(rad2deg(eu.x), 2), round(rad2deg(eu.y), 2), round(rad2deg(eu.z), 2)].map((v) => (Math.abs(v) < 1e-3 ? 0 : v));
+  }
+  afterEdit();
+}
+
+function setSpace(space) {
+  view.space = space;
+  document.querySelectorAll('[data-space]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.space === space)));
+  attachGizmo();
+}
+function setScaleFrom(v) {
+  view.scaleFrom = v;
+  document.querySelectorAll('[data-sfrom]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.sfrom === v)));
+}
+document.querySelectorAll('[data-space]').forEach((b) => b.addEventListener('click', () => setSpace(b.dataset.space)));
+document.querySelectorAll('[data-sfrom]').forEach((b) => b.addEventListener('click', () => setScaleFrom(b.dataset.sfrom)));
+
 function setMode(mode) {
   view.mode = mode;
   transform.setMode(mode);
   if (view.floorMode) attachFloorGizmo();
-  transform.setSpace(mode === 'scale' && transform.object !== pivot ? 'local' : 'world');
+  else attachGizmo();
+  document.querySelector('#scale-from').hidden = mode !== 'scale';
   document.querySelectorAll('[data-mode]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === mode)));
 }
 document.querySelectorAll('[data-mode]').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
@@ -2701,6 +3093,18 @@ el.canvas.addEventListener('pointerdown', (e) => {
     }
     return;
   }
+  if (e.button === 0 && view.mode === 'scale') {
+    const h = pickHandle(e.clientX, e.clientY);
+    if (h && beginBoxScale(h, e)) {
+      downInfo.sbox = true;
+      try {
+        el.canvas.setPointerCapture(e.pointerId);
+      } catch (err) {
+        /* ignore */
+      }
+      return;
+    }
+  }
   if (e.button === 0 && !onGizmo) {
     // grabbing a shape drags it (and the rest of the selection) along the floor
     const leafId = pickAt(e.clientX, e.clientY);
@@ -2731,6 +3135,7 @@ el.canvas.addEventListener('pointerdown', (e) => {
 
 el.canvas.addEventListener('pointermove', (e) => {
   const d = downInfo;
+  if (!d && view.mode === 'scale') el.canvas.style.cursor = pickHandle(e.clientX, e.clientY) ? 'grab' : '';
   if (!d || d.button !== 0 || d.onGizmo) return;
   if (d.floor) {
     if (!d.floor.active && Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4) d.floor.active = true;
@@ -2751,6 +3156,10 @@ el.canvas.addEventListener('pointermove', (e) => {
     return;
   }
   if (view.floorMode) return;
+  if (d.sbox) {
+    if (sbox.drag) boxScaleMove(e);
+    return;
+  }
   if (d.ground) {
     if (!d.ground.active && Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4) d.ground.active = true;
     if (!d.ground.active) return;
@@ -2861,6 +3270,15 @@ el.canvas.addEventListener('pointerup', (e) => {
     } else if (!info.floor && moved <= 4 && info.button === 0 && !info.onGizmo && view.floorSel != null) selectFloor(null);
     return;
   }
+  if (info.sbox) {
+    try {
+      el.canvas.releasePointerCapture(e.pointerId);
+    } catch (err) {
+      /* ignore */
+    }
+    if (sbox.drag) endBoxScale();
+    return;
+  }
   if (info.ground && info.ground.active) {
     try {
       el.canvas.releasePointerCapture(e.pointerId);
@@ -2928,6 +3346,8 @@ function menuItems() {
       { label: 'Add Orb', act: 'add:orb' },
       { label: 'Add Pill', act: 'add:pill' },
       { sep: true },
+      { label: 'Paste', key: 'Ctrl+V', act: 'paste', disabled: !readClip() },
+      { sep: true },
       { label: 'Add point light', act: 'light:point' },
       { label: 'Add spot light', act: 'light:spot' },
       { label: 'Import SVG…', act: 'svg' },
@@ -2946,6 +3366,9 @@ function menuItems() {
     { label: 'Align Y…', act: 'axis:y', disabled: tops.length < 1 },
     { label: 'Align Z…', act: 'axis:z', disabled: tops.length < 1 },
     { sep: true },
+    { label: 'Copy', key: 'Ctrl+C', act: 'copy' },
+    { label: 'Cut', key: 'Ctrl+X', act: 'cut' },
+    { label: 'Paste', key: 'Ctrl+V', act: 'paste', disabled: !readClip() },
     { label: 'Duplicate', key: 'C', act: 'dup' },
     { label: n && n.visible ? 'Hide' : 'Hide / show', act: 'hide' },
     { label: 'Rename', act: 'rename', disabled: !n },
@@ -3017,6 +3440,13 @@ window.addEventListener('keydown', (e) => {
     redo();
     return;
   }
+  if (mod && !typing && !e.shiftKey && (k === 'c' || k === 'x' || k === 'v')) {
+    if (k === 'c' && String(window.getSelection && window.getSelection()).length) return; // let real text copy work
+    e.preventDefault();
+    if (k === 'v') pasteClipboard();
+    else copySelection(k === 'x');
+    return;
+  }
   if (typing) return;
   if (FLY_KEYS.has(k) && !e.altKey && !e.metaKey) {
     fly.keys.add(k);
@@ -3033,6 +3463,7 @@ window.addEventListener('keydown', (e) => {
     if (k === '1') setMode('translate');
     else if (k === '2') setMode('rotate');
     else if (k === '3') setMode('scale');
+    else if (k === 'r') quarterTurn('y');
     else if (k === 'escape') {
       if (view.floorSel != null) selectFloor(null);
       else setFloorMode(false);
@@ -3045,6 +3476,9 @@ window.addEventListener('keydown', (e) => {
   if (k === '1') setMode('translate');
   else if (k === '2') setMode('rotate');
   else if (k === '3') setMode('scale');
+  else if (k === 'r') quarterTurn('y');
+  else if (k === 't') quarterTurn('z');
+  else if (k === 'l') setSpace(view.space === 'world' ? 'local' : 'world');
   else if (k === 'f') frameSelected();
   else if (k === 'u') doUnion('union');
   else if (k === 'n') doNegate();
@@ -3697,6 +4131,7 @@ function loop() {
     if (p >= 1) viewTween.on = false;
   }
   updateViewCube();
+  updateScaleBox();
   if (dirty && now - lastSolve > 70) solve();
   if (planeDirty) updateAlignPlane();
   orbit.update();
@@ -3750,4 +4185,4 @@ function boot() {
 boot();
 
 // test hook (only with ?test in the URL)
-if (/[?&]test\b/.test(location.search)) window.__mt = { transform, pivot, rt, lrt, getState: () => state };
+if (/[?&]test\b/.test(location.search)) window.__mt = { transform, pivot, rt, lrt, sbox, camera, getState: () => state };

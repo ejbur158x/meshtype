@@ -9,7 +9,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<link rel="stylesheet" href="style.css?v=0.4.0">
+<link rel="stylesheet" href="style.css?v=0.5.0">
 <script type="importmap">
 {
   "imports": {
@@ -68,7 +68,7 @@
   <header class="titlebar">
     <span class="logo" aria-hidden="true"></span>
     <span class="word">Meshtype</span>
-    <span class="ver">v0.4.0</span>
+    <span class="ver">v0.5.0</span>
     <input id="project-name" class="proj" type="text" value="untitled" maxlength="60" aria-label="Project name" spellcheck="false">
     <span class="spacer"></span>
     <button id="btn-install" type="button" hidden title="Install Meshtype as an app">Install app</button>
@@ -108,6 +108,8 @@
     <aside class="panel left" aria-label="Shapes and parts">
       <h2>Add shape</h2>
       <div class="adds">
+        <button type="button" data-add="box" title="Sharp box, 12 triangles">Box</button>
+        <button type="button" data-add="wall" title="Sharp wall slab, 4 × 3 × 0.2 m, sitting on the floor">Wall</button>
         <button type="button" data-add="block">Block</button>
         <button type="button" data-add="panel">Panel</button>
         <button type="button" data-add="disc">Disc</button>
@@ -144,6 +146,14 @@
           <button type="button" data-mode="translate" title="Move (1)" aria-pressed="true">Move</button>
           <button type="button" data-mode="rotate" title="Rotate (2)" aria-pressed="false">Rotate</button>
           <button type="button" data-mode="scale" title="Scale (3)" aria-pressed="false">Scale</button>
+        </div>
+        <div class="seg" role="group" aria-label="Axis space">
+          <button type="button" data-space="world" title="Move and rotate along the world axes (L)" aria-pressed="true">World</button>
+          <button type="button" data-space="local" title="Move and rotate along the object's own axes (L)" aria-pressed="false">Local</button>
+        </div>
+        <div class="seg" id="scale-from" role="group" aria-label="Scale from" hidden>
+          <button type="button" data-sfrom="edge" title="The opposite side stays planted (hold Alt to flip)" aria-pressed="true">From edge</button>
+          <button type="button" data-sfrom="center" title="Grow evenly from the center (hold Alt to flip)" aria-pressed="false">From center</button>
         </div>
         <label class="chk"><input id="chk-snap" type="checkbox" checked> Snap</label>
         <label class="chk" title="Grid and move-snap size">Grid
@@ -216,6 +226,6 @@
   <option value="trigger"><option value="alarm"><option value="camera"><option value="switch"><option value="prop"><option value="no-collide">
 </datalist>
 
-<script type="module" src="src/main.js?v=0.4.0"></script>
+<script type="module" src="src/main.js?v=0.5.0"></script>
 </body>
 </html>

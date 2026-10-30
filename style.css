@@ -482,3 +482,5 @@ body.floor-mode #btn-floor { color: #7a5a00; }
 .warn { margin: 0 0 8px; padding: 4px 8px; border: 1px solid #e0364a; border-radius: 3px; background: #fff0f2; color: #8f1020; }
 .floorlist .row { cursor: pointer; }
 .floorlist .sub { margin-left: auto; }
+
+.seg[hidden] { display: none; }

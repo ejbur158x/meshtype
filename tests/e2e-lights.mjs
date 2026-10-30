@@ -26,38 +26,7 @@ ok('tags saved', JSON.stringify(st.nodes[0].tags) === '["door","keycard-red"]', 
 await page.click('[data-untag="door"]');
 ok('tag removed', JSON.stringify((await saved()).nodes[0].tags) === '["keycard-red"]');
 
-// directional scale: X handle grabbed on the +X side, Ctrl held -> left edge stays put
-const leftBefore = await page.evaluate(() => { const r = __mt.rt.get(1); r.proxy.geometry.computeBoundingBox(); r.proxy.updateMatrixWorld(true); const b = new r.proxy.geometry.boundingBox.constructor().setFromObject(r.part, true); return b.min.x; });
-await page.keyboard.press('3'); // scale mode
-await page.keyboard.down('Control');
-await page.evaluate(() => {
-  const t = __mt.transform;
-  t.axis = 'X';
-  t.pointStart.set(1, 0, 0);
-  t.dispatchEvent({ type: 'dragging-changed', value: true });
-  t.object.scale.x = 3;
-  t.dispatchEvent({ type: 'objectChange' });
-  t.dispatchEvent({ type: 'dragging-changed', value: false });
-});
-await page.keyboard.up('Control');
-st = await saved();
-const arch = st.nodes.find((n) => n.name === 'Arch');
-const leftAfter = await page.evaluate(() => { const r = __mt.rt.get(1); r.proxy.geometry.computeBoundingBox(); r.proxy.updateMatrixWorld(true); const b = new r.proxy.geometry.boundingBox.constructor().setFromObject(r.part, true); return b.min.x; });
-ok('ctrl-scale grew to the right', arch.scl[0] === 3 && arch.pos[0] > 0.4, JSON.stringify(arch));
-ok('left edge stayed put', Math.abs(leftAfter - leftBefore) < 0.02, `${leftBefore.toFixed(3)} -> ${leftAfter.toFixed(3)}`);
-// without ctrl: scales from the center
-await page.evaluate(() => {
-  const t = __mt.transform;
-  t.axis = 'X';
-  t.pointStart.set(1, 0, 0);
-  t.dispatchEvent({ type: 'dragging-changed', value: true });
-  t.object.scale.x = 4;
-  t.dispatchEvent({ type: 'objectChange' });
-  t.dispatchEvent({ type: 'dragging-changed', value: false });
-});
-const a2 = (await saved()).nodes.find((n) => n.name === 'Arch');
-ok('plain scale keeps the center', a2.pos[0] === arch.pos[0] && a2.scl[0] === 4, JSON.stringify(a2));
-await page.keyboard.press('1');
+// (part scaling is covered by tests/e2e-transform.mjs)
 
 // lights
 await page.click('[data-add-light="point"]'); await page.waitForTimeout(300);
