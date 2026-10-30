@@ -1,4 +1,4 @@
-// Meshtype v0.6.1
+// Meshtype v0.6.2
 // A small browser mesh editor: squircle primitives, union / negate / split,
 // edge rounding, SVG extrusion, GLB export.
 
@@ -14,7 +14,7 @@ import { inspectSvg, makeSvgGeometry } from './svg.js';
 import { roundMesh, boxUVs } from './rounder.js';
 import { FLOORS, floorMaterial } from './floor.js';
 
-const VERSION = '0.6.1';
+const VERSION = '0.6.2';
 const STORE_KEY = 'meshtype.autosave';
 
 const PRESETS = {
@@ -168,6 +168,7 @@ let state = { name: 'untitled', nodes: [], assets: {}, sel: [], active: null, ne
 const view = {
   mode: 'translate',
   space: 'world',
+  surfaceDrag: true,
   scaleFrom: 'edge',
   floorMode: false,
   floorSel: null,
@@ -1053,7 +1054,8 @@ function worldMatrixOf(o) {
   return new THREE.Matrix4().compose(
     new THREE.Vector3().fromArray(o.pos),
     new THREE.Quaternion().setFromEuler(new THREE.Euler(deg2rad(o.rot[0]), deg2rad(o.rot[1]), deg2rad(o.rot[2]), 'XYZ')),
-    new THREE.Vector3().fromArray(o.scl)
+    // a curved wall is built at its real size, so its mesh is never scaled
+    isBent(o.type, o.params) ? new THREE.Vector3(1, 1, 1) : new THREE.Vector3().fromArray(o.scl)
   );
 }
 
@@ -1191,7 +1193,7 @@ transform.addEventListener('objectChange', () => {
       eu.setFromQuaternion(q, 'XYZ');
       o.pos = [round(p.x), round(p.y), round(p.z)];
       o.rot = [round(rad2deg(eu.x), 2), round(rad2deg(eu.y), 2), round(rad2deg(eu.z), 2)];
-      if (o.kind !== 'light') o.scl = [round(Math.max(0.01, s.x)), round(Math.max(0.01, s.y)), round(Math.max(0.01, s.z))];
+      if (o.kind !== 'light' && !isBent(o.type, o.params)) o.scl = [round(Math.max(0.01, s.x)), round(Math.max(0.01, s.y)), round(Math.max(0.01, s.z))];
       syncNode(o);
     }
     requestSolve();
@@ -2349,8 +2351,17 @@ function lookHTML(leaves) {
   const mixed = !same('mat');
   const matOptions =
     (mixed ? '<option value="" selected>Mixed</option>' : '') +
-    Object.entries(MATERIALS)
-      .map(([k, m]) => `<option value="${k}" ${!mixed && first.mat === k ? 'selected' : ''}>${m.label}</option>`)
+    [
+      ['Godot-friendly (import as-is)', true],
+      ['Aero preview (glass effects stay in Meshtype)', false],
+    ]
+      .map(
+        ([label, g]) =>
+          `<optgroup label="${label}">${Object.entries(MATERIALS)
+            .filter(([, m]) => !!m.godot === g)
+            .map(([k, m]) => `<option value="${k}" ${!mixed && first.mat === k ? 'selected' : ''}>${m.label}</option>`)
+            .join('')}</optgroup>`
+      )
       .join('');
   const anyTex = leaves.some((o) => o.tex);
   const size = (leaves.find((o) => o.tex) || first).texSize || 0.5;
@@ -2919,7 +2930,8 @@ function boxScaleMove(e) {
     F.setComponent(a, size / Math.max(hi - lo, 1e-6));
     P.setComponent(a, fromCenter ? c : s > 0 ? lo : hi);
   }
-  if (e.shiftKey && axes.length) {
+  const hasCurve = !f.single && !f.floor && d.leaves.some(({ o }) => isBent(o.type, o.params));
+  if ((e.shiftKey || hasCurve) && axes.length) {
     // Shift: keep proportions (all three axes scale together; the bottom stays on the floor)
     const k = Math.max(...axes.map((a) => F.getComponent(a)));
     F.set(k, k, k);
@@ -2964,14 +2976,31 @@ function boxScaleMove(e) {
       p.fromArray(o.pos);
       p.copy(new THREE.Vector3().setFromMatrixPosition(m)).applyMatrix4(W);
       o.pos = [round(p.x), round(p.y), round(p.z)];
-      o.scl = [round(scl[0] * F.x), round(scl[1] * F.y), round(scl[2] * F.z)].map((v) => Math.max(0.01, v));
+      if (isBent(o.type, o.params)) {
+        // A curved wall's box is the arc's footprint, not its length/thickness: the length
+        // scales with the footprint, the thickness changes by the same amount the footprint
+        // does (not by its ratio), and it can't get thicker than the curve allows.
+        const dz = (nmax.z - nmin.z) - (f.max.z - f.min.z);
+        const radius = Math.abs((scl[0] * F.x) / deg2rad(o.params.bend));
+        const thick = Math.min(Math.max(0.01, scl[2] + dz), 1.8 * radius);
+        o.scl = [round(Math.max(0.01, scl[0] * F.x)), round(Math.max(0.01, scl[1] * F.y)), round(thick)];
+      } else {
+        o.scl = [round(scl[0] * F.x), round(scl[1] * F.y), round(scl[2] * F.z)].map((v) => Math.max(0.01, v));
+      }
     } else {
-      W.clone().multiply(m).decompose(p, q, sc);
+      // move the origin with the box, then stretch each part along its own axes by how much
+      // the box stretches in that direction; rotation stays, so nothing shears
+      p.setFromMatrixPosition(m).applyMatrix4(W);
       o.pos = [round(p.x), round(p.y), round(p.z)];
       if (o.kind !== 'light') {
-        eu.setFromQuaternion(q, 'XYZ');
-        o.rot = [round(rad2deg(eu.x), 2), round(rad2deg(eu.y), 2), round(rad2deg(eu.z), 2)];
-        o.scl = [round(Math.max(0.01, sc.x)), round(Math.max(0.01, sc.y)), round(Math.max(0.01, sc.z))];
+        const Rm = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(deg2rad(o.rot[0]), deg2rad(o.rot[1]), deg2rad(o.rot[2]), 'XYZ'));
+        const fw = F.clone().applyQuaternion(f.Q.clone().invert()); // frame is world-aligned here
+        void fw;
+        const k = [0, 1, 2].map((i) => {
+          const dir = new THREE.Vector3().setComponent(i, 1).applyMatrix4(Rm);
+          return Math.hypot(dir.x * F.x, dir.y * F.y, dir.z * F.z);
+        });
+        o.scl = [0, 1, 2].map((i) => round(Math.max(0.01, scl[i] * k[i])));
       }
     }
     syncNode(o);
@@ -3069,6 +3098,9 @@ $('#chk-snap').addEventListener('change', (e) => {
 $('#chk-result').addEventListener('change', (e) => {
   view.result = e.target.checked;
   syncVisibility();
+});
+$('#chk-surface').addEventListener('change', (e) => {
+  view.surfaceDrag = e.target.checked;
 });
 $('#chk-cages').addEventListener('change', (e) => {
   view.cages = e.target.checked;
@@ -3294,11 +3326,19 @@ el.canvas.addEventListener('pointerdown', (e) => {
       if (inSel || !multi) {
         const start = groundPoint(e.clientX, e.clientY, lastPickPoint.y);
         if (start) {
+          const leaves = selLeaves();
+          const box0 = boxOf(leaves.filter((o) => o.visible));
+          const c0 = box0.getCenter(new THREE.Vector3());
           downInfo.ground = {
             y: lastPickPoint.y,
             start,
             active: false,
-            leaves: selLeaves().map((o) => ({ o, pos: o.pos.slice() })),
+            leaves: leaves.map((o) => ({ o, pos: o.pos.slice() })),
+            box0,
+            c0,
+            off: new THREE.Vector3(lastPickPoint.x - c0.x, 0, lastPickPoint.z - c0.z),
+            ids: new Set(leaves.map((o) => o.id)),
+            tops: new Set(uniqueTops().map((t) => t.id)),
           };
         }
       }
@@ -3345,6 +3385,10 @@ el.canvas.addEventListener('pointermove', (e) => {
   if (d.ground) {
     if (!d.ground.active && Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4) d.ground.active = true;
     if (!d.ground.active) return;
+    if (view.surfaceDrag && !d.ground.box0.isEmpty()) {
+      surfaceDrag(d.ground, e);
+      return;
+    }
     const p = groundPoint(e.clientX, e.clientY, d.ground.y);
     if (!p) return;
     let dx = p.x - d.ground.start.x;
@@ -3374,6 +3418,74 @@ el.canvas.addEventListener('pointermove', (e) => {
   marquee.style.width = `${Math.abs(e.clientX - d.x)}px`;
   marquee.style.height = `${Math.abs(e.clientY - d.y)}px`;
 });
+
+/** Everything a dragged thing can land on: other solids, floors (the ground plane is the fallback). */
+function surfaceTargets(g) {
+  const list = [];
+  for (const u of units.values()) {
+    const n = node(u.id);
+    if (u.mesh && u.mesh.visible && n && !n.neg && !g.tops.has(u.id)) list.push(u.mesh);
+  }
+  for (const n of state.nodes) {
+    if (n.kind !== 'part' || n.parent != null || n.neg || !n.visible || g.ids.has(n.id)) continue;
+    const u = units.get(n.id);
+    const r = rt.get(n.id);
+    if (r && !(u && u.mesh)) list.push(r.part);
+  }
+  if (state.floor.show) for (const r of frt.values()) list.push(r.mesh);
+  return list;
+}
+
+/**
+ * Roblox-style drag: the selection rides on whatever is under the cursor. On a top face it
+ * sits on it; against a wall it presses flat against the wall; with nothing there it sits on
+ * the ground (y = 0).
+ */
+function surfaceDrag(g, e) {
+  const rect = el.canvas.getBoundingClientRect();
+  const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  const hit = raycaster.intersectObjects(surfaceTargets(g), false)[0];
+  let point;
+  let normal;
+  if (hit && hit.face) {
+    point = hit.point.clone();
+    normal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
+    if (normal.dot(raycaster.ray.direction) > 0) normal.negate();
+  } else {
+    _plane.set(new THREE.Vector3(0, 1, 0), 0);
+    point = raycaster.ray.intersectPlane(_plane, new THREE.Vector3());
+    normal = new THREE.Vector3(0, 1, 0);
+    if (!point) return;
+  }
+  const half = g.box0.getSize(new THREE.Vector3()).multiplyScalar(0.5);
+  const T = g.c0.clone();
+  const grid = view.snap ? state.floor.grid : 0;
+  const snap = (v, base) => (grid ? base + Math.round((v - base) / grid) * grid : v);
+  if (normal.y > 0.6) {
+    T.x = snap(point.x - g.off.x, g.c0.x);
+    T.z = snap(point.z - g.off.z, g.c0.z);
+    T.y = point.y + half.y;
+  } else if (normal.y < -0.6) {
+    T.x = snap(point.x - g.off.x, g.c0.x);
+    T.z = snap(point.z - g.off.z, g.c0.z);
+    T.y = point.y - half.y;
+  } else {
+    // a wall: touch it along its facing axis, slide freely along it, keep the height
+    const a = Math.abs(normal.x) >= Math.abs(normal.z) ? 'x' : 'z';
+    const b = a === 'x' ? 'z' : 'x';
+    T[a] = point[a] + Math.sign(normal[a]) * half[a];
+    T[b] = snap(point[b] - g.off[b], g.c0[b]);
+  }
+  const dlt = T.sub(g.c0);
+  for (const { o, pos } of g.leaves) {
+    o.pos = [round(pos[0] + dlt.x), round(pos[1] + dlt.y), round(pos[2] + dlt.z)];
+    syncNode(o);
+  }
+  if (transform.object === pivot) recenterPivot();
+  requestSolve();
+  planeDirty = true;
+}
 
 const _corner = new THREE.Vector3();
 /** Select every top-level thing with at least 80% of its on-screen box inside the rectangle. */

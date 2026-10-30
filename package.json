@@ -1,6 +1,6 @@
 {
   "name": "meshtype",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "private": true,
   "description": "Browser mesh editor and room builder for Frutiger Aero shapes, with a CLI for agents.",
   "type": "module",

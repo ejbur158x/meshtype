@@ -45,15 +45,31 @@ export const MATERIALS = {
     label: 'Glow',
     color: '#7dffb0',
     emissive: true,
+    godot: true,
     props: { roughness: 0.3, emissiveIntensity: 2.2 },
   },
+  // Plain metal/roughness/emission/alpha materials: these import into Godot as-is.
+  satin: { label: 'Satin plastic', color: '#e8eef4', godot: true, props: { roughness: 0.45 } },
+  rubber: { label: 'Rubber', color: '#2b2f35', godot: true, props: { roughness: 0.95 } },
+  painted: { label: 'Painted metal', color: '#3d8fd1', godot: true, props: { metalness: 0.55, roughness: 0.35 } },
+  steel: { label: 'Brushed steel', color: '#c9d1d9', godot: true, props: { metalness: 1, roughness: 0.38 } },
+  mirror: { label: 'Mirror', color: '#ffffff', godot: true, props: { metalness: 1, roughness: 0.02 } },
+  ceramic: { label: 'Ceramic', color: '#f4f7fa', godot: true, props: { roughness: 0.12 } },
+  concrete: { label: 'Concrete', color: '#9a9ea3', godot: true, props: { roughness: 0.92 } },
+  wood: { label: 'Wood (color)', color: '#9a6b43', godot: true, props: { roughness: 0.65 } },
+  acrylic: { label: 'Clear acrylic', color: '#d8f2ff', godot: true, props: { roughness: 0.05, transparent: true, opacity: 0.3, depthWrite: false } },
+  tinted: { label: 'Tinted glass (Godot)', color: '#5ab8e8', godot: true, props: { roughness: 0.04, metalness: 0.1, transparent: true, opacity: 0.45, depthWrite: false } },
+  neon: { label: 'Neon', color: '#39c6ff', emissive: true, godot: true, props: { roughness: 0.2, emissiveIntensity: 4 } },
 };
+
+for (const k of ['matte', 'chrome']) if (MATERIALS[k]) MATERIALS[k].godot = true;
 
 const BASE = {
   metalness: 0, roughness: 0.5, transmission: 0, thickness: 0, ior: 1.5,
   clearcoat: 0, clearcoatRoughness: 0, iridescence: 0, iridescenceIOR: 1.3,
   iridescenceThicknessRange: [100, 400], attenuationDistance: Infinity,
   specularIntensity: 1, envMapIntensity: 1, emissiveIntensity: 0,
+  transparent: false, opacity: 1, depthWrite: true,
 };
 
 /** Reset a MeshPhysicalMaterial to a preset, tinted with `color`. Edits in place. */

@@ -9,7 +9,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<link rel="stylesheet" href="style.css?v=0.6.1">
+<link rel="stylesheet" href="style.css?v=0.6.2">
 <script type="importmap">
 {
   "imports": {
@@ -68,7 +68,7 @@
   <header class="titlebar">
     <span class="logo" aria-hidden="true"></span>
     <span class="word">Meshtype</span>
-    <span class="ver">v0.6.1</span>
+    <span class="ver">v0.6.2</span>
     <input id="project-name" class="proj" type="text" value="untitled" maxlength="60" aria-label="Project name" spellcheck="false">
     <span class="spacer"></span>
     <button id="btn-install" type="button" hidden title="Install Meshtype as an app">Install app</button>
@@ -156,6 +156,7 @@
           <button type="button" data-sfrom="center" title="Grow evenly from the center (hold Alt to flip)" aria-pressed="false">From center</button>
         </div>
         <label class="chk"><input id="chk-snap" type="checkbox" checked> Snap</label>
+        <label class="chk" title="Dragging a shape lands it on whatever is under the cursor (other shapes, floors, the ground). Off: it slides at its current height."><input id="chk-surface" type="checkbox" checked> Land on surfaces</label>
         <label class="chk" title="Grid and move-snap size">Grid
           <select id="grid-size" class="mini" aria-label="Grid size">
             <option value="0.05">0.05 m</option><option value="0.25">0.25 m</option><option value="0.5" selected>0.5 m</option><option value="1">1 m</option><option value="2">2 m</option>
@@ -226,6 +227,6 @@
   <option value="trigger"><option value="alarm"><option value="camera"><option value="switch"><option value="prop"><option value="no-collide">
 </datalist>
 
-<script type="module" src="src/main.js?v=0.6.1"></script>
+<script type="module" src="src/main.js?v=0.6.2"></script>
 </body>
 </html>

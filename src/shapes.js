@@ -219,9 +219,13 @@ function curvedBox(bendDeg, size) {
   const g = new THREE.BoxGeometry(L, H, D, segs, 1, 1);
   const R = L / theta; // signed radius of the centerline
   const pos = g.attributes.position;
+  // never let the inner side pass through the curve's center (that folds the mesh inside out)
+  const zLimit = 0.92 * Math.abs(R);
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i);
-    const z = pos.getZ(i);
+    let z = pos.getZ(i);
+    if (R > 0) z = Math.min(z, zLimit);
+    else z = Math.max(z, -zLimit);
     const phi = x / R;
     const r = R - z;
     pos.setXYZ(i, r * Math.sin(phi), pos.getY(i), R - r * Math.cos(phi));

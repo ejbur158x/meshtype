@@ -1,6 +1,6 @@
 # Meshtype
 
-**v0.6.1.** A tiny browser mesh editor for squircles and glossy Frutiger Aero shapes. Solid and cutter parts, UNION / NEGATE / SPLIT, edge rounding, SVG extrusion, multi-select, and GLB export. No build step. Installable as an app and works offline.
+**v0.6.2.** A tiny browser mesh editor for squircles and glossy Frutiger Aero shapes. Solid and cutter parts, UNION / NEGATE / SPLIT, edge rounding, SVG extrusion, multi-select, and GLB export. No build step. Installable as an app and works offline.
 
 Made because Blender is overkill when all you need is a rounded panel with a dent in it.
 
@@ -96,6 +96,8 @@ With several things selected the gizmo moves them together.
 | `Shift` | Fine movement (held) |
 | `Ctrl` | Fast movement (held) |
 
+**Land on surfaces** (toolbar, on by default): dragging a shape rides it over whatever is under the cursor, Roblox-style. On a top face it sits on it, against a wall it presses flat to the wall, over nothing it drops to the ground. Turn it off to slide at the current height.
+
 **Mouse:** right-drag orbits, middle-drag pans, the wheel zooms. Left-drag on a shape slides it along the ground; left-drag on empty space draws a selection box (an object is selected when at least 80% of it is inside the box; hold Shift or Ctrl to add). Right-click without dragging opens the menu.
 
 **View cube** (top right of the viewport): click a face for that view, or drag it to orbit.
@@ -129,7 +131,7 @@ With several things selected the gizmo moves them together.
 - Hold **Shift** to keep proportions.
 - With Snap on, sizes snap to the grid. The status bar shows width × height × depth while you drag.
 
-One part scales in its own (rotated) frame, so a turned part stays clean. Several things scale inside their shared world box.
+One part scales in its own (rotated) frame, so a turned part stays clean. Several things (or a union) scale inside their shared world box: each part stretches along its own axes and keeps its rotation. If the selection contains a curved wall, it scales evenly (a stretched arc can't stay an arc).
 
 **R** and **T** turn the selection a quarter turn around Y (spin on the floor) and Z (tip over), about the selection's center. Plain keys on purpose: browsers reserve Ctrl+T and no web page can take it.
 
@@ -170,6 +172,8 @@ Rounding is applied to a top-level part or union. If you union a rounded part in
 - Overlapping filled shapes in the same SVG can leave internal faces that confuse booleans. Merge them in your SVG editor first.
 
 ## Materials and textures
+
+The material list has two groups. **Godot-friendly** ones import into Godot exactly as they look here: Satin plastic, Rubber, Painted metal, Brushed steel, Mirror, Ceramic, Concrete, Wood (color), Clear acrylic and Tinted glass (see-through with plain transparency), Neon, Glow, Matte, Chrome. **Aero preview** ones (Aero glass, Gloss plastic, Bubble, Frosted glass) use glass refraction, clearcoat and iridescence that look great in Meshtype but Godot drops or simplifies on import; use Tinted glass or Clear acrylic for glass in the game.
 
 Aero glass, Gloss plastic, Bubble, Frosted glass, Chrome, Matte, Glow. Pick one, then tint it. With a union selected, the material, tint and texture apply to every part in it.
 
@@ -215,7 +219,7 @@ The service worker caches the whole app. After you edit any file, regenerate the
 node tools/build-precache.mjs
 ```
 
-## Known limits (v0.6.1)
+## Known limits (v0.6.2)
 
 - Booleans are live, so keep Detail at 2 or 3 on dense scenes.
 - Scaling a rotated part from a multi-selection gizmo can introduce shear, which Meshtype can't store. Use Scale on single parts for that.
