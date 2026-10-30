@@ -1,0 +1,22 @@
+{
+  "name": "hall-a",
+  "floor": { "grid": 0.5 },
+  "floors": [
+    { "name": "Floor", "pos": [0, 0, 0], "w": 8, "d": 6, "preset": "tile" }
+  ],
+  "nodes": [
+    { "name": "Wall North", "type": "box", "pos": [0, 1.5, -3], "size": [8, 3, 0.2], "mat": "matte", "color": "#e6ebf0", "tags": ["room"] },
+    { "name": "Wall West", "type": "box", "pos": [-4, 1.5, 0], "size": [6, 3, 0.2], "rot": [0, 90, 0], "mat": "matte", "color": "#e6ebf0", "tags": ["room"] },
+    {
+      "name": "Door Wall",
+      "tags": ["room", "door"],
+      "children": [
+        { "name": "Wall East", "type": "box", "pos": [4, 1.5, 0], "size": [6, 3, 0.2], "rot": [0, 90, 0], "mat": "matte", "color": "#e6ebf0" },
+        { "name": "Doorway", "type": "squircle", "params": { "nPlan": 20, "nProf": 6, "detail": 2 }, "neg": true, "pos": [4, 1.1, 0], "size": [0.6, 2.4, 1.2], "mat": "gloss", "color": "#2aa8ff" }
+      ]
+    },
+    { "name": "Curved Bench", "type": "box", "params": { "bend": 90 }, "pos": [-1, 0.25, 1], "size": [3, 0.5, 0.5], "mat": "gloss", "color": "#7fd0ff", "round": { "outer": 0.08, "res": 64 }, "tags": ["prop"] },
+    { "name": "Lamp Orb", "type": "squircle", "params": { "nPlan": 2, "nProf": 2, "detail": 2 }, "pos": [0, 2.7, 0], "size": [0.5, 0.25, 0.5], "mat": "glow", "color": "#bff0ff", "tags": ["prop", "no-collide"] },
+    { "name": "Ceiling Light", "lightType": "point", "pos": [0, 2.5, 0], "intensity": 40, "range": 9, "color": "#eaf6ff", "tags": ["alarm"] }
+  ]
+}

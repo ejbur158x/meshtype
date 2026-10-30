@@ -1,0 +1,16 @@
+{
+  "name": "meshtype",
+  "version": "0.6.0",
+  "private": true,
+  "description": "Browser mesh editor and room builder for Frutiger Aero shapes, with a CLI for agents.",
+  "type": "module",
+  "scripts": {
+    "build-room": "node tools/meshtype.mjs build",
+    "check-room": "node tools/meshtype.mjs check",
+    "preview-room": "node tools/meshtype.mjs preview",
+    "precache": "node tools/build-precache.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.50.0"
+  }
+}

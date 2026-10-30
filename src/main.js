@@ -1,4 +1,4 @@
-// Meshtype v0.5.2
+// Meshtype v0.6.0
 // A small browser mesh editor: squircle primitives, union / negate / split,
 // edge rounding, SVG extrusion, GLB export.
 
@@ -14,7 +14,7 @@ import { inspectSvg, makeSvgGeometry } from './svg.js';
 import { roundMesh, boxUVs } from './rounder.js';
 import { FLOORS, floorMaterial } from './floor.js';
 
-const VERSION = '0.5.2';
+const VERSION = '0.6.0';
 const STORE_KEY = 'meshtype.autosave';
 
 const PRESETS = {
@@ -407,6 +407,52 @@ function sanitizeProject(data) {
     for (const [k, v] of Object.entries(data.assets)) if (typeof v === 'string') assets[k] = v;
   }
   return { nodes: ordered, assets, nextId: Math.max(next, Number(data.nextId) || 1), migrated };
+}
+
+/**
+ * Authoring shortcuts (for hand- and agent-written rooms): nested "children" instead of
+ * parent ids, no ids, no "kind", "size" instead of "scl", type defaults to box.
+ * Files saved by the editor already use the full form and pass through unchanged.
+ */
+function expandAuthoring(doc) {
+  const raw = Array.isArray(doc.nodes) ? doc.nodes : null;
+  if (!raw) return doc;
+  const needs = (list) => list.some((n) => n && (n.children || n.size || !n.kind || !Number.isInteger(n.id) || list !== raw || needs(n.children || [])));
+  if (!needs(raw)) return doc;
+  const used = new Set();
+  const collect = (list) => {
+    for (const n of list) {
+      if (n && Number.isInteger(n.id)) used.add(n.id);
+      if (n && n.children) collect(n.children);
+    }
+  };
+  collect(raw);
+  for (const f of doc.floors || []) if (Number.isInteger(f.id)) used.add(f.id);
+  let next = 1;
+  const take = () => {
+    while (used.has(next)) next++;
+    used.add(next);
+    return next;
+  };
+  const nodes = [];
+  const add = (src, parent) => {
+    if (!src || typeof src !== 'object') return;
+    const n = { ...src };
+    delete n.children;
+    if (!Number.isInteger(n.id)) n.id = take();
+    if (!n.kind) n.kind = src.children ? 'group' : src.lightType ? 'light' : 'part';
+    if (n.size && !n.scl) n.scl = n.size;
+    delete n.size;
+    if (n.kind === 'part' && !n.type) n.type = 'box';
+    if (n.kind === 'part' && n.type === 'box' && !n.params) n.params = { bend: 0 };
+    if (parent != null) n.parent = parent;
+    if (!n.name) n.name = n.kind === 'group' ? `Union ${n.id}` : n.kind === 'light' ? `Light ${n.id}` : `Part ${n.id}`;
+    nodes.push(n);
+    for (const c of src.children || []) add(c, n.id);
+  };
+  for (const n of raw) add(n, n && n.parent != null ? n.parent : null);
+  const floors = (doc.floors || []).map((f) => (Number.isInteger(f.id) ? f : { ...f, id: take() }));
+  return { ...doc, nodes, floors, nextId: Math.max(Number(doc.nextId) || 1, ...[...used].map((v) => v + 1)) };
 }
 
 function sampleProject() {
@@ -3652,7 +3698,7 @@ el.fileOpen.addEventListener('change', async () => {
   try {
     const data = JSON.parse(await file.text());
     if (!data || !(Array.isArray(data.nodes) || Array.isArray(data.objects))) throw new Error('not a Meshtype project');
-    restore({ ...data, sel: [], selected: null });
+    restore({ ...expandAuthoring(data), sel: [], selected: null });
     commit();
     toast(`Opened ${file.name}`);
   } catch (err) {
@@ -4240,7 +4286,7 @@ $('#btn-install').addEventListener('click', async () => {
   installEvent = null;
   $('#btn-install').hidden = true;
 });
-if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol) && !/[?&]cli\b/.test(location.search)) {
   navigator.serviceWorker.register('./sw.js').catch(() => {});
 }
 
@@ -4265,5 +4311,121 @@ function boot() {
 
 boot();
 
-// test hook (only with ?test in the URL)
-if (/[?&]test\b/.test(location.search)) window.__mt = { transform, pivot, rt, lrt, sbox, camera, getState: () => state };
+// test / automation hooks (only with ?test or ?cli in the URL)
+const AUTOMATION = /[?&](test|cli)\b/.test(location.search);
+if (AUTOMATION) {
+  window.__mt = { transform, pivot, rt, lrt, sbox, camera, getState: () => state };
+  window.__mt.cli = {
+    /** Load a project, solve every boolean and wait for rounding to finish. */
+    async load(raw) {
+      const data = expandAuthoring(raw);
+      if (view.floorMode) setFloorMode(false);
+      restore({ ...data, sel: [] });
+      solve();
+      await settleRounds();
+      if (dirty) solve();
+      await settleRounds();
+      return data;
+    },
+    /** Problems an agent should hear about before shipping a room. */
+    validate(raw) {
+      const out = [];
+      const add = (level, msg, n) => out.push({ level, msg, node: n ? n.name : undefined });
+      const rawNodes = Array.isArray(raw && raw.nodes) ? raw.nodes : [];
+      if (rawNodes.length !== state.nodes.length) add('error', `${rawNodes.length - state.nodes.length} node(s) were invalid and dropped`);
+      for (const r of rawNodes) {
+        const n = state.nodes.find((x) => x.id === r.id) || state.nodes.find((x) => x.name === r.name);
+        if (!n) continue;
+        if (r.kind !== 'group' && r.kind !== 'light' && r.type && !SHAPES[r.type]) add('error', `unknown shape type "${r.type}" (became a squircle)`, n);
+        if (n.kind === 'part' && r.params) {
+          for (const [k, v] of Object.entries(r.params)) {
+            if (!(k in n.params)) add('warn', `param "${k}" does not exist on ${n.type} and was ignored`, n);
+            else if (Number(v) !== n.params[k]) add('warn', `param ${k}=${v} was clamped to ${n.params[k]}`, n);
+          }
+        }
+        if (Array.isArray(r.scl) && r.scl.some((v) => v < 0.01)) add('warn', 'scale below 0.01 was clamped (no negative scale; use Mirror instead)', n);
+        if (n.parent != null && r.parent != null && n.parent !== r.parent) add('error', `parent ${r.parent} is not a union; the part was moved to the top level`, n);
+      }
+      for (const n of state.nodes) {
+        if (n.kind === 'part' && n.parent == null && n.neg) add('warn', 'cutter at the top level does nothing (put it in a union)', n);
+        if (n.kind === 'group' && !n.neg && !kidsOf(n.id).some((k) => !k.neg)) add('error', 'union has no solid parts, so it is empty', n);
+        if (n.kind === 'part' && n.type === 'svg' && !state.assets[n.asset]) add('error', `SVG asset "${n.asset}" is missing`, n);
+        if (n.kind === 'light' && n.intensity <= 0) add('warn', 'light has zero brightness', n);
+        if (n.kind === 'part' && n.type === 'box' && n.params.bend) {
+          const radius = Math.abs(n.scl[0] / deg2rad(n.params.bend));
+          if (n.scl[2] / 2 >= radius) add('warn', 'curve is too tight for this thickness: the inner side folds over itself', n);
+        }
+      }
+      for (const u of units.values()) {
+        const n = node(u.id);
+        if (n && isGroup(n) && !n.neg && n.visible && !u.mesh && kidsOf(n.id).some((k) => !k.neg)) add('error', 'union solved to nothing (do the cutters remove all of it?)', n);
+      }
+      for (const id of overlappingFloors()) add('warn', `floor "${floorById(id).name}" overlaps another floor`);
+      if (state.floors.length) {
+        for (const n of state.nodes) {
+          if (n.kind !== 'part' || n.parent != null || n.neg || !n.visible) continue;
+          const b = leafBox(n);
+          const top = Math.max(...state.floors.map((f) => f.pos[1]));
+          if (b.min.y < -0.01 && top >= -0.01) add('warn', `pokes ${(-b.min.y).toFixed(2)} m below the floor`, n);
+        }
+      }
+      const names = new Map();
+      for (const n of state.nodes) if (n.parent == null) names.set(n.name, (names.get(n.name) || 0) + 1);
+      for (const [nm, c] of names) if (c > 1) add('info', `${c} top-level things are named "${nm}"; exports will be ${nm}, ${nm}-2, ...`);
+      return out;
+    },
+    /** GLB (base64) + room manifest, exactly like the Export GLB button. */
+    async exportGLB() {
+      const res = await exportRoom();
+      if (!res) return null;
+      const buf = await new GLTFExporter().parseAsync(res.grp, { binary: true });
+      const bytes = new Uint8Array(buf);
+      let bin = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+      return { glb: btoa(bin), manifest: res.manifest };
+    },
+    /** 2x2 preview sheet (iso, top, front, right) as a PNG data URL. */
+    snap(tile = 512) {
+      const box = new THREE.Box3();
+      for (const n of state.nodes) if (n.kind !== 'group' && n.visible) box.union(leafBox(n));
+      for (const f of state.floors) for (const [x, z] of floorCorners(f)) box.expandByPoint(new THREE.Vector3(x, f.pos[1], z));
+      if (box.isEmpty()) box.set(new THREE.Vector3(-1, 0, -1), new THREE.Vector3(1, 1, 1));
+      const c = box.getCenter(new THREE.Vector3());
+      const r = Math.max(0.5, box.getSize(new THREE.Vector3()).length() / 2);
+      const views = [
+        ['iso', new THREE.Vector3(1, 0.75, 1.15)],
+        ['top', new THREE.Vector3(0, 1, 0.0001)],
+        ['front', new THREE.Vector3(0, 0.15, 1)],
+        ['right', new THREE.Vector3(1, 0.15, 0)],
+      ];
+      const sheet = document.createElement('canvas');
+      sheet.width = tile * 2;
+      sheet.height = tile * 2;
+      const g = sheet.getContext('2d');
+      const prev = { pos: camera.position.clone(), target: orbit.target.clone(), aspect: camera.aspect };
+      transform.detach();
+      planeMesh.visible = false;
+      sbox.group.visible = false;
+      renderer.setSize(tile, tile, false);
+      camera.aspect = 1;
+      camera.updateProjectionMatrix();
+      const dist = r / Math.sin(deg2rad(camera.fov / 2)) * 1.05;
+      views.forEach(([label, dir], k) => {
+        camera.position.copy(c).addScaledVector(dir.normalize(), dist);
+        camera.lookAt(c);
+        renderer.render(scene, camera);
+        g.drawImage(renderer.domElement, (k % 2) * tile, Math.floor(k / 2) * tile, tile, tile);
+        g.font = 'bold 18px sans-serif';
+        g.fillStyle = 'rgba(0,0,0,0.55)';
+        g.fillRect((k % 2) * tile + 8, Math.floor(k / 2) * tile + 8, 70, 26);
+        g.fillStyle = '#fff';
+        g.fillText(label, (k % 2) * tile + 16, Math.floor(k / 2) * tile + 27);
+      });
+      camera.position.copy(prev.pos);
+      orbit.target.copy(prev.target);
+      resize();
+      return sheet.toDataURL('image/png');
+    },
+  };
+}
+

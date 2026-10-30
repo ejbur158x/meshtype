@@ -1,0 +1,335 @@
+{
+  "format": "meshtype-room",
+  "formatVersion": 1,
+  "generator": "Meshtype 0.5.2",
+  "room": "hall-a",
+  "glb": "hall-a.glb",
+  "units": "meters",
+  "upAxis": "+Y",
+  "lightForward": "-Z",
+  "grid": 0.5,
+  "floors": [
+    {
+      "node": "floor-col",
+      "godotName": "floor",
+      "size": [
+        8,
+        6
+      ],
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "topY": 0,
+      "rotationYDeg": 0,
+      "preset": "tile"
+    }
+  ],
+  "collisionSuffix": "-col",
+  "nodes": [
+    {
+      "node": "wall-north-col",
+      "godotName": "wall-north",
+      "kind": "part",
+      "id": 1,
+      "name": "Wall North",
+      "tags": [
+        "room"
+      ],
+      "collision": true,
+      "position": [
+        0,
+        1.5,
+        -3
+      ],
+      "rotationDeg": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        8,
+        3,
+        0.2
+      ],
+      "bounds": {
+        "min": [
+          -4,
+          0,
+          -3.1
+        ],
+        "max": [
+          4,
+          3,
+          -2.9
+        ],
+        "center": [
+          0,
+          1.5,
+          -3
+        ],
+        "size": [
+          8,
+          3,
+          0.2
+        ]
+      },
+      "material": {
+        "preset": "matte",
+        "color": "#e6ebf0"
+      },
+      "rounded": false
+    },
+    {
+      "node": "wall-west-col",
+      "godotName": "wall-west",
+      "kind": "part",
+      "id": 2,
+      "name": "Wall West",
+      "tags": [
+        "room"
+      ],
+      "collision": true,
+      "position": [
+        -4,
+        1.5,
+        0
+      ],
+      "rotationDeg": [
+        0,
+        90,
+        0
+      ],
+      "scale": [
+        6,
+        3,
+        0.2
+      ],
+      "bounds": {
+        "min": [
+          -4.1,
+          0,
+          -3
+        ],
+        "max": [
+          -3.9,
+          3,
+          3
+        ],
+        "center": [
+          -4,
+          1.5,
+          0
+        ],
+        "size": [
+          0.2,
+          3,
+          6
+        ]
+      },
+      "material": {
+        "preset": "matte",
+        "color": "#e6ebf0"
+      },
+      "rounded": false
+    },
+    {
+      "node": "door-wall-col",
+      "godotName": "door-wall",
+      "kind": "union",
+      "id": 3,
+      "name": "Door Wall",
+      "tags": [
+        "room",
+        "door"
+      ],
+      "collision": true,
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotationDeg": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "bounds": {
+        "min": [
+          3.9,
+          0,
+          -3
+        ],
+        "max": [
+          4.1,
+          3,
+          3
+        ],
+        "center": [
+          4,
+          1.5,
+          0
+        ],
+        "size": [
+          0.2,
+          3,
+          6
+        ]
+      },
+      "material": {
+        "preset": "matte",
+        "color": "#e6ebf0"
+      },
+      "rounded": false
+    },
+    {
+      "node": "curved-bench-col",
+      "godotName": "curved-bench",
+      "kind": "part",
+      "id": 6,
+      "name": "Curved Bench",
+      "tags": [
+        "prop"
+      ],
+      "collision": true,
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotationDeg": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "bounds": {
+        "min": [
+          -2.4702,
+          -0.0009,
+          0.7507
+        ],
+        "max": [
+          0.4755,
+          0.5005,
+          1.6856
+        ],
+        "center": [
+          -0.9973,
+          0.2498,
+          1.2182
+        ],
+        "size": [
+          2.9457,
+          0.5014,
+          0.9349
+        ]
+      },
+      "material": {
+        "preset": "gloss",
+        "color": "#7fd0ff"
+      },
+      "rounded": true
+    },
+    {
+      "node": "lamp-orb",
+      "godotName": "lamp-orb",
+      "kind": "part",
+      "id": 7,
+      "name": "Lamp Orb",
+      "tags": [
+        "prop",
+        "no-collide"
+      ],
+      "collision": false,
+      "position": [
+        0,
+        2.7,
+        0
+      ],
+      "rotationDeg": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.5,
+        0.25,
+        0.5
+      ],
+      "bounds": {
+        "min": [
+          -0.25,
+          2.575,
+          -0.25
+        ],
+        "max": [
+          0.25,
+          2.825,
+          0.25
+        ],
+        "center": [
+          0,
+          2.7,
+          0
+        ],
+        "size": [
+          0.5,
+          0.25,
+          0.5
+        ]
+      },
+      "material": {
+        "preset": "glow",
+        "color": "#bff0ff"
+      },
+      "rounded": false
+    }
+  ],
+  "lights": [
+    {
+      "node": "ceiling-light",
+      "godotName": "ceiling-light",
+      "type": "point",
+      "godotType": "OmniLight3D",
+      "id": 8,
+      "name": "Ceiling Light",
+      "tags": [
+        "alarm"
+      ],
+      "color": "#eaf6ff",
+      "intensityCandela": 40,
+      "range": 9,
+      "spotAngleDeg": null,
+      "penumbra": null,
+      "castShadows": true,
+      "position": [
+        0,
+        2.5,
+        0
+      ],
+      "rotationDeg": [
+        0,
+        0,
+        0
+      ],
+      "direction": null
+    }
+  ],
+  "notes": [
+    "Every mesh and light in the GLB is a direct child of the root node, named as in \"node\".",
+    "With collisionSuffix set, Godot strips \"-col\" from the name on import and adds a StaticBody3D with trimesh collision; the node is then called \"godotName\".",
+    "Tags are also stored on each node as glTF extras (meshtype.tags).",
+    "Lights are in the GLB as KHR_lights_punctual (point/spot, intensity in candela)."
+  ]
+}

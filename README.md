@@ -1,6 +1,6 @@
 # Meshtype
 
-**v0.5.2.** A tiny browser mesh editor for squircles and glossy Frutiger Aero shapes. Solid and cutter parts, UNION / NEGATE / SPLIT, edge rounding, SVG extrusion, multi-select, and GLB export. No build step. Installable as an app and works offline.
+**v0.6.0.** A tiny browser mesh editor for squircles and glossy Frutiger Aero shapes. Solid and cutter parts, UNION / NEGATE / SPLIT, edge rounding, SVG extrusion, multi-select, and GLB export. No build step. Installable as an app and works offline.
 
 Made because Blender is overkill when all you need is a rounded panel with a dent in it.
 
@@ -16,6 +16,20 @@ python -m http.server 8000
 Or push it to GitHub Pages as-is. Everything it needs is in this repo, including the libraries (`vendor/`).
 
 **Install it:** in Chrome or Edge use the install button in the address bar (or the Install app button in Meshtype's title bar). After the first load it runs fully offline.
+
+## For agents (Claude, Astra): build rooms from JSON
+
+Rooms are plain JSON, so an agent can write one and the CLI bakes it, no clicking:
+
+```sh
+npm install && npx playwright install chromium     # once
+node tools/meshtype.mjs check rooms/hall-a.meshtype.json
+node tools/meshtype.mjs build rooms/hall-a.meshtype.json --out ../game/assets/rooms
+```
+
+`build` writes `hall-a.glb`, `hall-a.room.json` and `hall-a.preview.png` (four views to look at before committing). `check` lists errors and warnings (empty unions, cutters doing nothing, floors overlapping, parts sunk into the floor, bad params...). The format is in **[docs/FORMAT.md](docs/FORMAT.md)**, the workflow and room conventions in **[docs/AGENTS.md](docs/AGENTS.md)**, and a working example in `examples/hall-a.meshtype.json`. The editor's Open loads the same files, so any agent-built room can be tweaked by hand.
+
+![hall-a preview](examples/hall-a.preview.png)
 
 ## Shapes
 
@@ -186,7 +200,9 @@ src/rounder.js          edge rounder (signed distance field)
 src/round-worker.js     runs the rounder off the main thread
 src/materials.js        material presets + procedural sky
 src/floor.js            baseplate flooring presets (procedural textures)
-tools/                  build-precache.mjs, make-icons.mjs
+tools/                  meshtype.mjs (CLI), build-precache.mjs, make-icons.mjs
+docs/                   FORMAT.md, AGENTS.md, rooms-workflow.yml
+examples/               hall-a room (source, GLB, manifest, preview)
 tests/                  rounder.test.mjs, e2e*.mjs (real-browser checks)
 vendor/                 three.js, three-mesh-bvh, three-bvh-csg (see vendor/README.md)
 ```
@@ -199,7 +215,7 @@ The service worker caches the whole app. After you edit any file, regenerate the
 node tools/build-precache.mjs
 ```
 
-## Known limits (v0.5.2)
+## Known limits (v0.6.0)
 
 - Booleans are live, so keep Detail at 2 or 3 on dense scenes.
 - Scaling a rotated part from a multi-selection gizmo can introduce shear, which Meshtype can't store. Use Scale on single parts for that.

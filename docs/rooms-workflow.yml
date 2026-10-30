@@ -1,0 +1,29 @@
+# Copy to .github/workflows/rooms.yml in the game repo.
+# Builds every rooms/*.meshtype.json into assets/rooms/ on push and commits the results.
+name: Build Meshtype rooms
+on:
+  push:
+    paths: ['rooms/**.meshtype.json']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  rooms:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: ejbur158x/meshtype
+          path: .meshtype
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: cd .meshtype && npm install && npx playwright install --with-deps chromium
+      - run: node .meshtype/tools/meshtype.mjs build rooms/*.meshtype.json --out assets/rooms
+      - run: |
+          git config user.name "meshtype-bot"
+          git config user.email "meshtype-bot@users.noreply.github.com"
+          git add assets/rooms
+          git diff --cached --quiet || git commit -m "Build rooms (Meshtype)"
+          git push
