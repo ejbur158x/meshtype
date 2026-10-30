@@ -1,4 +1,4 @@
-// Meshtype v0.2.0
+// Meshtype v0.2.1
 // A small browser mesh editor: squircle primitives, union / negate / split,
 // edge rounding, SVG extrusion, GLB export.
 
@@ -13,7 +13,7 @@ import { MATERIALS, applyMaterial, makeAeroEnvironment } from './materials.js';
 import { inspectSvg, makeSvgGeometry } from './svg.js';
 import { roundMesh } from './rounder.js';
 
-const VERSION = '0.2.0';
+const VERSION = '0.2.1';
 const STORE_KEY = 'meshtype.autosave';
 
 const PRESETS = {
@@ -77,6 +77,7 @@ const el = {
   redo: $('#btn-redo'),
   fileOpen: $('#file-open'),
   fileSvg: $('#file-svg'),
+  fileSky: $('#file-sky'),
   strip: $('#chk-strip'),
   ctx: $('#ctx'),
   union: $('#btn-union'),
@@ -356,6 +357,8 @@ const orbit = new OrbitControls(camera, el.canvas);
 orbit.enableDamping = true;
 orbit.dampingFactor = 0.12;
 orbit.target.set(0, 0, 0);
+// Mouse map: right-drag orbits, middle-drag pans, left-drag is box select (handled below).
+orbit.mouseButtons = { LEFT: -1, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE };
 
 const transform = new TransformControls(camera, el.canvas);
 transform.size = 0.8;
@@ -1746,19 +1749,238 @@ $('#chk-cages').addEventListener('change', (e) => {
   view.cages = e.target.checked;
   syncCages();
 });
-$('#chk-sky').addEventListener('change', (e) => {
-  view.sky = e.target.checked;
-  scene.background = view.sky ? env.sky : plainBg;
+/* sky: Aero (procedural), a solid color, or an uploaded panorama */
+
+const SKY_KEY = 'meshtype.sky';
+const sky = { mode: 'aero', color: '#bfe9ff', image: null, reflect: true };
+let skyTex = null;
+let skyEnv = null;
+
+function applySky() {
+  if (sky.mode === 'color') {
+    scene.background = new THREE.Color(sky.color);
+    scene.backgroundBlurriness = 0;
+    scene.environment = env.envMap;
+  } else if (sky.mode === 'image' && skyTex) {
+    scene.background = skyTex;
+    scene.backgroundBlurriness = 0;
+    scene.environment = sky.reflect && skyEnv ? skyEnv : env.envMap;
+  } else {
+    scene.background = env.sky;
+    scene.backgroundBlurriness = 0.12;
+    scene.environment = env.envMap;
+  }
+  document.querySelectorAll('[data-sky]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.sky === sky.mode)));
+  const c = $('#sky-color');
+  if (c) c.value = sky.color;
+  const r = $('#sky-reflect');
+  if (r) r.checked = sky.reflect;
+}
+
+function saveSky() {
+  try {
+    localStorage.setItem(SKY_KEY, JSON.stringify(sky));
+  } catch (e) {
+    /* image too large for storage: it stays for this session only */
+  }
+}
+
+function loadSkyTexture(url) {
+  return new Promise((resolve, reject) => {
+    new THREE.TextureLoader().load(
+      url,
+      (tex) => {
+        tex.mapping = THREE.EquirectangularReflectionMapping;
+        tex.colorSpace = THREE.SRGBColorSpace;
+        if (skyTex) skyTex.dispose();
+        if (skyEnv) skyEnv.dispose();
+        skyTex = tex;
+        const pm = new THREE.PMREMGenerator(renderer);
+        skyEnv = pm.fromEquirectangular(tex).texture;
+        pm.dispose();
+        resolve();
+      },
+      undefined,
+      reject
+    );
+  });
+}
+
+/** Downscale big panoramas so they fit in storage and VRAM. */
+function shrinkImage(file, maxW = 2048) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, maxW / img.width);
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(img.width * k));
+      c.height = Math.max(1, Math.round(img.height * k));
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      resolve(c.toDataURL('image/jpeg', 0.88));
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('could not read that image'));
+    };
+    img.src = url;
+  });
+}
+
+const skyPanel = $('#sky-panel');
+const skyBtn = $('#btn-sky');
+function toggleSkyPanel(open) {
+  const show = open ?? skyPanel.hidden;
+  skyPanel.hidden = !show;
+  skyBtn.setAttribute('aria-expanded', String(show));
+}
+skyBtn.addEventListener('click', () => toggleSkyPanel());
+window.addEventListener('pointerdown', (e) => {
+  if (!skyPanel.hidden && !skyPanel.contains(e.target) && e.target !== skyBtn) toggleSkyPanel(false);
 });
+document.querySelectorAll('[data-sky]').forEach((b) =>
+  b.addEventListener('click', () => {
+    if (b.dataset.sky === 'image' && !skyTex) {
+      el.fileSky.click();
+      return;
+    }
+    sky.mode = b.dataset.sky;
+    applySky();
+    saveSky();
+  })
+);
+document.querySelectorAll('[data-swatch]').forEach((b) =>
+  b.addEventListener('click', () => {
+    sky.mode = 'color';
+    sky.color = b.dataset.swatch;
+    applySky();
+    saveSky();
+  })
+);
+$('#sky-color').addEventListener('input', (e) => {
+  sky.mode = 'color';
+  sky.color = e.target.value;
+  applySky();
+});
+$('#sky-color').addEventListener('change', saveSky);
+$('#sky-reflect').addEventListener('change', (e) => {
+  sky.reflect = e.target.checked;
+  applySky();
+  saveSky();
+});
+$('#btn-sky-upload').addEventListener('click', () => el.fileSky.click());
+el.fileSky.addEventListener('change', async () => {
+  const file = el.fileSky.files && el.fileSky.files[0];
+  el.fileSky.value = '';
+  if (!file) return;
+  try {
+    sky.image = await shrinkImage(file);
+    await loadSkyTexture(sky.image);
+    sky.mode = 'image';
+    applySky();
+    saveSky();
+    toast('Skybox loaded. Use a 2:1 equirectangular panorama for best results.');
+  } catch (err) {
+    toast('Could not load that skybox: ' + err.message);
+  }
+});
+
+async function bootSky() {
+  try {
+    const raw = localStorage.getItem(SKY_KEY);
+    if (raw) Object.assign(sky, JSON.parse(raw));
+  } catch (e) {
+    /* defaults */
+  }
+  if (sky.mode === 'image') {
+    try {
+      if (sky.image) await loadSkyTexture(sky.image);
+    } catch (e) {
+      /* fall through */
+    }
+    if (!skyTex) sky.mode = 'aero';
+  }
+  applySky();
+}
 
 /* picking */
 
 const raycaster = new THREE.Raycaster();
 let downInfo = null;
+const marquee = $('#marquee');
+
 el.canvas.addEventListener('pointerdown', (e) => {
   closeMenu();
-  downInfo = { x: e.clientX, y: e.clientY, button: e.button, onGizmo: transform.axis !== null && transform.axis !== undefined };
+  if (e.button === 1) e.preventDefault(); // no middle-click autoscroll
+  const onGizmo = transform.axis !== null && transform.axis !== undefined;
+  downInfo = { x: e.clientX, y: e.clientY, button: e.button, onGizmo, box: false };
+  if (e.button === 0 && !onGizmo) {
+    try {
+      el.canvas.setPointerCapture(e.pointerId);
+    } catch (err) {
+      /* ignore */
+    }
+  }
 });
+
+el.canvas.addEventListener('pointermove', (e) => {
+  const d = downInfo;
+  if (!d || d.button !== 0 || d.onGizmo) return;
+  if (!d.box && Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4) d.box = true;
+  if (!d.box) return;
+  const r = el.stage.getBoundingClientRect();
+  const x0 = Math.min(d.x, e.clientX) - r.left;
+  const y0 = Math.min(d.y, e.clientY) - r.top;
+  marquee.hidden = false;
+  marquee.style.left = `${x0}px`;
+  marquee.style.top = `${y0}px`;
+  marquee.style.width = `${Math.abs(e.clientX - d.x)}px`;
+  marquee.style.height = `${Math.abs(e.clientY - d.y)}px`;
+});
+
+const _corner = new THREE.Vector3();
+/** Select every top-level thing with at least 80% of its on-screen box inside the rectangle. */
+function boxSelect(x0, y0, x1, y1, additive) {
+  const rect = el.canvas.getBoundingClientRect();
+  const mx0 = Math.min(x0, x1);
+  const mx1 = Math.max(x0, x1);
+  const my0 = Math.min(y0, y1);
+  const my1 = Math.max(y0, y1);
+  camera.updateMatrixWorld();
+  const hits = [];
+  for (const n of state.nodes) {
+    if (n.parent != null || !n.visible) continue;
+    const leaves = leavesOf(n.id).filter((o) => o.visible);
+    if (!leaves.length) continue;
+    const b = boxOf(leaves);
+    if (b.isEmpty()) continue;
+    let sx0 = Infinity;
+    let sy0 = Infinity;
+    let sx1 = -Infinity;
+    let sy1 = -Infinity;
+    let behind = false;
+    for (let i = 0; i < 8; i++) {
+      _corner.set(i & 1 ? b.max.x : b.min.x, i & 2 ? b.max.y : b.min.y, i & 4 ? b.max.z : b.min.z);
+      if (_corner.clone().applyMatrix4(camera.matrixWorldInverse).z >= 0) behind = true;
+      _corner.project(camera);
+      const sx = rect.left + ((_corner.x + 1) / 2) * rect.width;
+      const sy = rect.top + ((1 - _corner.y) / 2) * rect.height;
+      sx0 = Math.min(sx0, sx);
+      sx1 = Math.max(sx1, sx);
+      sy0 = Math.min(sy0, sy);
+      sy1 = Math.max(sy1, sy);
+    }
+    if (behind) continue;
+    const area = (sx1 - sx0) * (sy1 - sy0);
+    const iw = Math.min(sx1, mx1) - Math.max(sx0, mx0);
+    const ih = Math.min(sy1, my1) - Math.max(sy0, my0);
+    if (area > 0 && iw > 0 && ih > 0 && (iw * ih) / area >= 0.8) hits.push(n.id);
+  }
+  if (additive) setSel([...state.sel, ...hits.filter((id) => !state.sel.includes(id))], hits[hits.length - 1] ?? state.active);
+  else setSel(hits, hits[hits.length - 1]);
+  if (!hits.length && !additive) toast('Box select needs 80% of an object inside the box.');
+}
 
 function pickAt(clientX, clientY) {
   const rect = el.canvas.getBoundingClientRect();
@@ -1774,6 +1996,16 @@ el.canvas.addEventListener('pointerup', (e) => {
   const info = downInfo;
   downInfo = null;
   const moved = Math.hypot(e.clientX - info.x, e.clientY - info.y);
+  if (info.box) {
+    marquee.hidden = true;
+    try {
+      el.canvas.releasePointerCapture(e.pointerId);
+    } catch (err) {
+      /* ignore */
+    }
+    boxSelect(info.x, info.y, e.clientX, e.clientY, e.ctrlKey || e.metaKey || e.shiftKey);
+    return;
+  }
   if (moved > 4 || info.onGizmo) return;
   const leafId = pickAt(e.clientX, e.clientY);
   const multi = e.ctrlKey || e.metaKey || e.shiftKey;
@@ -1979,9 +2211,11 @@ function flyStep(dt) {
 }
 
 function frameSelected() {
-  const lv = selLeaves().filter((o) => o.visible);
+  let lv = selLeaves().filter((o) => o.visible);
+  if (!lv.length) lv = state.nodes.filter((n) => n.kind === 'part' && n.visible && !n.neg);
   if (!lv.length) return;
   const box = boxOf(lv);
+  if (box.isEmpty()) return;
   const c = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3()).length() || 1;
   const dir = camera.position.clone().sub(orbit.target).normalize();
@@ -2101,12 +2335,71 @@ function resize() {
 }
 new ResizeObserver(resize).observe(el.stage);
 
+/* view cube: shows the camera orientation, click a face for that view, drag to orbit */
+
+const vcEl = $('#vcube');
+const vcCube = $('#vc-cube');
+const viewTween = { on: false, t0: 0, from: new THREE.Vector3(), q: new THREE.Quaternion(), dist: 1 };
+const VIEW_DIRS = { front: [0, 0, 1], back: [0, 0, -1], right: [1, 0, 0], left: [-1, 0, 0], top: [0, 1, 0.0001], bottom: [0, -1, 0.0001] };
+
+function setView(name) {
+  const to = new THREE.Vector3(...VIEW_DIRS[name]).normalize();
+  const from = camera.position.clone().sub(orbit.target);
+  viewTween.dist = from.length() || 4;
+  from.normalize();
+  viewTween.from.copy(from);
+  viewTween.q.setFromUnitVectors(from, to);
+  viewTween.t0 = performance.now();
+  viewTween.on = true;
+}
+
+function updateViewCube() {
+  const q = camera.quaternion.clone().invert();
+  const e = new THREE.Matrix4().makeRotationFromQuaternion(q).elements;
+  const a = (r, c) => e[c * 4 + r] * ((r === 1) !== (c === 1) ? -1 : 1); // flip Y for CSS
+  vcCube.style.transform = `matrix3d(${a(0, 0)},${a(1, 0)},${a(2, 0)},0,${a(0, 1)},${a(1, 1)},${a(2, 1)},0,${a(0, 2)},${a(1, 2)},${a(2, 2)},0,0,0,0,1)`;
+}
+
+let vcDrag = null;
+vcEl.addEventListener('pointerdown', (e) => {
+  vcDrag = { x: e.clientX, y: e.clientY, lx: e.clientX, ly: e.clientY, face: e.target.closest('[data-view]'), moved: false };
+  viewTween.on = false;
+  vcEl.setPointerCapture(e.pointerId);
+  e.preventDefault();
+});
+vcEl.addEventListener('pointermove', (e) => {
+  if (!vcDrag) return;
+  if (Math.hypot(e.clientX - vcDrag.x, e.clientY - vcDrag.y) > 4) vcDrag.moved = true;
+  if (!vcDrag.moved) return;
+  const dx = e.clientX - vcDrag.lx;
+  const dy = e.clientY - vcDrag.ly;
+  vcDrag.lx = e.clientX;
+  vcDrag.ly = e.clientY;
+  const sph = new THREE.Spherical().setFromVector3(camera.position.clone().sub(orbit.target));
+  sph.theta -= dx * 0.012;
+  sph.phi = clamp(sph.phi - dy * 0.012, 0.02, Math.PI - 0.02);
+  camera.position.copy(orbit.target).add(new THREE.Vector3().setFromSpherical(sph));
+});
+vcEl.addEventListener('pointerup', () => {
+  const d = vcDrag;
+  vcDrag = null;
+  if (d && !d.moved && d.face) setView(d.face.dataset.view);
+});
+
 function loop() {
   requestAnimationFrame(loop);
   const now = performance.now();
   const dt = Math.min(0.1, (now - lastFrame) / 1000);
   lastFrame = now;
   flyStep(dt);
+  if (viewTween.on) {
+    const p = Math.min(1, (now - viewTween.t0) / 240);
+    const k = p * p * (3 - 2 * p);
+    const qi = new THREE.Quaternion().slerp(viewTween.q, k);
+    camera.position.copy(orbit.target).addScaledVector(viewTween.from.clone().applyQuaternion(qi), viewTween.dist);
+    if (p >= 1) viewTween.on = false;
+  }
+  updateViewCube();
   if (dirty && now - lastSolve > 70) solve();
   if (planeDirty) updateAlignPlane();
   orbit.update();
@@ -2149,6 +2442,7 @@ function boot() {
   if (!data || !(Array.isArray(data.nodes) || Array.isArray(data.objects))) data = sampleProject();
   setMode('translate');
   applySnap();
+  bootSky();
   restore(data);
   commit();
   resize();

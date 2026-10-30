@@ -9,7 +9,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=0.2.1">
 <script type="importmap">
 {
   "imports": {
@@ -63,7 +63,7 @@
   <header class="titlebar">
     <span class="logo" aria-hidden="true"></span>
     <span class="word">Meshtype</span>
-    <span class="ver">v0.2.0</span>
+    <span class="ver">v0.2.1</span>
     <input id="project-name" class="proj" type="text" value="untitled" maxlength="60" aria-label="Project name" spellcheck="false">
     <span class="spacer"></span>
     <button id="btn-install" type="button" hidden title="Install Meshtype as an app">Install app</button>
@@ -88,6 +88,7 @@
     </div>
     <input id="file-open" type="file" accept=".json,application/json" hidden>
     <input id="file-svg" type="file" accept=".svg,image/svg+xml" hidden>
+    <input id="file-sky" type="file" accept="image/*" hidden>
   </div>
 
   <main class="app">
@@ -131,7 +132,38 @@
         <label class="chk"><input id="chk-snap" type="checkbox" checked> Snap</label>
         <label class="chk"><input id="chk-result" type="checkbox" checked> Result</label>
         <label class="chk"><input id="chk-cages" type="checkbox"> Cages</label>
-        <label class="chk"><input id="chk-sky" type="checkbox" checked> Sky</label>
+        <button id="btn-sky" type="button" aria-expanded="false" aria-controls="sky-panel" title="Sky background">Sky ▾</button>
+      </div>
+      <div id="sky-panel" class="skypanel" hidden>
+        <div class="field"><span class="lbl">Background</span>
+          <div class="seg wide2">
+            <button type="button" data-sky="aero" aria-pressed="true">Aero</button>
+            <button type="button" data-sky="color" aria-pressed="false">Color</button>
+            <button type="button" data-sky="image" aria-pressed="false">Image</button>
+          </div></div>
+        <div class="field"><span class="lbl">Solid color</span>
+          <div class="swatches">
+            <button type="button" class="sw" data-swatch="#bfe9ff" style="background:#bfe9ff" aria-label="Sky blue"></button>
+            <button type="button" class="sw" data-swatch="#7fd1ff" style="background:#7fd1ff" aria-label="Aero blue"></button>
+            <button type="button" class="sw" data-swatch="#d6f5e3" style="background:#d6f5e3" aria-label="Mint"></button>
+            <button type="button" class="sw" data-swatch="#f4fbff" style="background:#f4fbff" aria-label="Frost"></button>
+            <button type="button" class="sw" data-swatch="#1d2b3a" style="background:#1d2b3a" aria-label="Night"></button>
+            <button type="button" class="sw" data-swatch="#000000" style="background:#000" aria-label="Black"></button>
+            <input id="sky-color" type="color" value="#bfe9ff" aria-label="Custom sky color">
+          </div></div>
+        <div class="field"><span class="lbl">Skybox image <span class="sub">(equirectangular panorama)</span></span>
+          <div class="inline"><button type="button" id="btn-sky-upload">Upload…</button><label class="chk"><input id="sky-reflect" type="checkbox" checked> Reflect it</label></div></div>
+      </div>
+      <div id="marquee" class="marquee" hidden></div>
+      <div id="vcube" class="vcube" aria-label="View selector. Click a face or drag to orbit.">
+        <div class="vc-cube" id="vc-cube">
+          <div class="vc-face" data-view="front" style="--t:translateZ(var(--h))">Front</div>
+          <div class="vc-face" data-view="back" style="--t:rotateY(180deg) translateZ(var(--h))">Back</div>
+          <div class="vc-face" data-view="right" style="--t:rotateY(90deg) translateZ(var(--h))">Right</div>
+          <div class="vc-face" data-view="left" style="--t:rotateY(-90deg) translateZ(var(--h))">Left</div>
+          <div class="vc-face" data-view="top" style="--t:rotateX(90deg) translateZ(var(--h))">Top</div>
+          <div class="vc-face" data-view="bottom" style="--t:rotateX(-90deg) translateZ(var(--h))">Bottom</div>
+        </div>
       </div>
       <div id="empty" class="empty" hidden>Add a shape, or drop an SVG here.</div>
       <div id="toast" class="toast" role="status" aria-live="polite"></div>
@@ -149,6 +181,6 @@
 
 <div id="ctx" class="ctx" role="menu" hidden></div>
 
-<script type="module" src="src/main.js"></script>
+<script type="module" src="src/main.js?v=0.2.1"></script>
 </body>
 </html>

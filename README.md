@@ -1,6 +1,6 @@
 # Meshtype
 
-**v0.2.0.** A tiny browser mesh editor for squircles and glossy Frutiger Aero shapes. Solid and cutter parts, UNION / NEGATE / SPLIT, edge rounding, SVG extrusion, multi-select, and GLB export. No build step. Installable as an app and works offline.
+**v0.2.1.** A tiny browser mesh editor for squircles and glossy Frutiger Aero shapes. Solid and cutter parts, UNION / NEGATE / SPLIT, edge rounding, SVG extrusion, multi-select, and GLB export. No build step. Installable as an app and works offline.
 
 Made because Blender is overkill when all you need is a rounded panel with a dent in it.
 
@@ -49,14 +49,18 @@ With several things selected the gizmo moves them together.
 | `Shift` | Fine movement (held) |
 | `Ctrl` | Fast movement (held) |
 
-Orbit with left-drag on empty space, pan with right-drag, zoom with the wheel. Ctrl+W closes a browser tab and no page can stop that, but Meshtype asks for confirmation if you hit it while flying, so you don't lose work.
+**Mouse:** right-drag orbits, middle-drag pans, the wheel zooms, and left-drag draws a selection box (an object is selected when at least 80% of it is inside the box; hold Shift or Ctrl to add). Right-click without dragging opens the menu.
+
+**View cube** (top right of the viewport): click a face for that view, or drag it to orbit.
+
+**Sky** (button in the viewport toolbar): the Aero sky, a solid color (swatches or any color), or your own equirectangular panorama (JPG or PNG, shrunk to 2048 px wide). The panorama can also drive the reflections on glass. Ctrl+W closes a browser tab and no page can stop that, but Meshtype asks for confirmation if you hit it while flying, so you don't lose work.
 
 ## Other shortcuts
 
 | Key | Action |
 | --- | --- |
 | `1` `2` `3` | Move, Rotate, Scale gizmo |
-| `F` | Frame the selection |
+| `F` | Focus the camera on the selection (everything if nothing is selected) |
 | `C` | Duplicate |
 | `Esc` | Deselect |
 | `Delete` | Delete the selection |
@@ -108,7 +112,7 @@ Cutters alone export nothing. Units: 1 unit = 1 meter. Y is up.
 index.html              page, import map
 style.css               the Windows 7 Aero skin
 manifest.webmanifest    PWA manifest
-sw.js                   service worker (offline)
+sw.js                   service worker (network first, offline fallback)
 precache.json           file list for the service worker (generated)
 icons/                  app icons
 src/main.js             editor: scene, parts, unions, UI, export
@@ -118,7 +122,7 @@ src/rounder.js          edge rounder (signed distance field)
 src/round-worker.js     runs the rounder off the main thread
 src/materials.js        material presets + procedural sky
 tools/                  build-precache.mjs, make-icons.mjs
-tests/                  rounder.test.mjs, e2e.mjs
+tests/                  rounder.test.mjs, e2e.mjs, e2e-controls.mjs
 vendor/                 three.js, three-mesh-bvh, three-bvh-csg (see vendor/README.md)
 ```
 
@@ -130,7 +134,7 @@ The service worker caches the whole app. After you edit any file, regenerate the
 node tools/build-precache.mjs
 ```
 
-## Known limits (v0.2.0)
+## Known limits (v0.2.1)
 
 - Booleans are live, so keep Detail at 2 or 3 on dense scenes.
 - Scaling a rotated part from a multi-selection gizmo can introduce shear, which Meshtype can't store. Use Scale on single parts for that.

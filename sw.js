@@ -29,16 +29,24 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+// Network first, cache as the offline fallback. This way an update is never hidden behind
+// a stale cached copy; the precache only matters when there is no connection.
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
   event.respondWith(
     (async () => {
-      const hit = await caches.match(req, { ignoreSearch: true });
-      if (hit) return hit;
       try {
-        return await fetch(req);
+        const fresh = await fetch(req, { cache: 'no-cache' });
+        if (fresh.ok) {
+          const keys = await caches.keys();
+          const name = keys.filter((k) => k.startsWith(CACHE_PREFIX)).sort().pop();
+          if (name) (await caches.open(name)).put(req, fresh.clone());
+        }
+        return fresh;
       } catch (err) {
+        const hit = await caches.match(req, { ignoreSearch: true });
+        if (hit) return hit;
         if (req.mode === 'navigate') {
           const shell = await caches.match('./index.html');
           if (shell) return shell;
