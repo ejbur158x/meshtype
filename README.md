@@ -22,6 +22,7 @@ Or push it to GitHub Pages as-is. Everything it needs is in this repo, including
 **Add shape** drops a primitive into the scene:
 
 - **Box** and **Wall**: sharp, 12 triangles, sitting on the floor. Use them for room shells and anything whose edges you never see. A Wall starts at 4 × 3 × 0.2 m.
+  - **Curve angle** bends a Box or Wall along its whole length, around the vertical axis. The two ends always end up exactly that many degrees apart, however long, tall or thick it is: 90° is a quarter-turn hallway wall, 180° a U, 360° a ring. Negative angles curve the other way. Resize it as usual and the curve keeps its angle. At 0° it is back to a plain 12-triangle box.
 - **Block, Panel, Disc, Orb**: squircles with two sliders. *Outline n* shapes the top view, *Edge n* the side profile (2 = round, 4 = classic squircle, 20 = nearly a box).
 - **Pill**, **SVG** (extrude an SVG), **Light** and **Spot**.
 

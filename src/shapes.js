@@ -25,7 +25,7 @@ export const SHAPES = {
     limits: { nPlan: [2, 20], nProf: [2, 20], detail: [1, 4] },
   },
   // sharp unit cube: 12 triangles, flat normals
-  box: { defaults: {}, limits: {} },
+  box: { defaults: { bend: 0 }, limits: { bend: [-360, 360] } },
   pill: {
     defaults: { radius: 0.25, length: 0.5, detail: 2 },
     limits: { radius: [0.05, 0.5], length: [0, 2], detail: [1, 4] },
@@ -207,8 +207,37 @@ function pill({ radius, length, detail }) {
   return gridGeometry(pos, nor, uv, nu, rows.length);
 }
 
-export function makeGeometry(type, params) {
+/**
+ * Sharp box, optionally curved along its length (X) around the vertical axis.
+ * A bent box is built at its real size so the arc is a true circle: the two
+ * ends end up exactly `bend` degrees apart however long, tall or thick it is.
+ */
+function curvedBox(bendDeg, size) {
+  const [L, H, D] = size;
+  const theta = (bendDeg * Math.PI) / 180;
+  const segs = Math.min(180, Math.max(2, Math.ceil(Math.abs(bendDeg) / 4)));
+  const g = new THREE.BoxGeometry(L, H, D, segs, 1, 1);
+  const R = L / theta; // signed radius of the centerline
+  const pos = g.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const z = pos.getZ(i);
+    const phi = x / R;
+    const r = R - z;
+    pos.setXYZ(i, r * Math.sin(phi), pos.getY(i), R - r * Math.cos(phi));
+  }
+  g.clearGroups();
+  g.computeVertexNormals();
+  return g;
+}
+
+export function isBent(type, params) {
+  return type === 'box' && Math.abs(Number(params && params.bend) || 0) >= 0.5;
+}
+
+export function makeGeometry(type, params, size = [1, 1, 1]) {
   if (type === 'box') {
+    if (isBent(type, params)) return curvedBox(params.bend, size);
     const g = new THREE.BoxGeometry(1, 1, 1);
     g.clearGroups(); // one material per part; face groups would confuse the booleans
     return g;

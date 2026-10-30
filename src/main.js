@@ -8,7 +8,7 @@ import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { OBJExporter } from 'three/addons/exporters/OBJExporter.js';
 import { Brush, Evaluator, ADDITION, SUBTRACTION, INTERSECTION } from 'three-bvh-csg';
-import { SHAPES, makeGeometry } from './shapes.js';
+import { SHAPES, makeGeometry, isBent } from './shapes.js';
 import { MATERIALS, applyMaterial, makeAeroEnvironment } from './materials.js';
 import { inspectSvg, makeSvgGeometry } from './svg.js';
 import { roundMesh, boxUVs } from './rounder.js';
@@ -18,8 +18,8 @@ const VERSION = '0.5.0';
 const STORE_KEY = 'meshtype.autosave';
 
 const PRESETS = {
-  box: { label: 'Box', type: 'box', params: {}, scl: [1, 1, 1], onFloor: true },
-  wall: { label: 'Wall', type: 'box', params: {}, scl: [4, 3, 0.2], onFloor: true },
+  box: { label: 'Box', type: 'box', params: { bend: 0 }, scl: [1, 1, 1], onFloor: true },
+  wall: { label: 'Wall', type: 'box', params: { bend: 0 }, scl: [4, 3, 0.2], onFloor: true },
   block: { label: 'Block', type: 'squircle', params: { nPlan: 4, nProf: 4, detail: 2 }, scl: [1, 1, 1] },
   panel: { label: 'Panel', type: 'squircle', params: { nPlan: 5, nProf: 10, detail: 2 }, scl: [2, 0.14, 1.4] },
   disc: { label: 'Disc', type: 'squircle', params: { nPlan: 2, nProf: 10, detail: 2 }, scl: [1, 0.2, 1] },
@@ -38,7 +38,7 @@ const SHAPE_UI = {
     ['length', 'Body length', 0, 2, 0.01],
     ['detail', 'Detail', 1, 4, 1],
   ],
-  box: [],
+  box: [['bend', 'Curve angle° (bends the whole length)', -360, 360, 5]],
   svg: [
     ['depth', 'Extrude depth', 0.02, 2, 0.01],
     ['detail', 'Curve detail', 1, 4, 1],
@@ -639,14 +639,14 @@ const rt = new Map();
 
 function geometryFor(o) {
   if (o.type === 'svg') return makeSvgGeometry(state.assets[o.asset], o.params);
-  return makeGeometry(o.type, o.params);
+  return makeGeometry(o.type, o.params, o.scl);
 }
 
 function hiGeometryFor(o) {
   // denser source for the rounder, so facets don't show up as ripples
   const params = { ...o.params, detail: 6 };
   if (o.type === 'svg') return makeSvgGeometry(state.assets[o.asset], params);
-  return makeGeometry(o.type, params);
+  return makeGeometry(o.type, params, o.scl);
 }
 
 function setBoxUVs(g) {
@@ -720,7 +720,9 @@ function ensureRT(o) {
 /** Push a part's data into its three.js objects. */
 function syncRT(o) {
   const r = ensureRT(o);
-  const key = o.type + (o.asset || '') + JSON.stringify(o.params);
+  // a curved box is built at its real size, so its size is part of the geometry key
+  const bent = isBent(o.type, o.params);
+  const key = o.type + (o.asset || '') + JSON.stringify(o.params) + (bent ? JSON.stringify(o.scl) : '');
   if (r.key !== key) {
     const old = r.geo;
     r.geo = geometryFor(o);
@@ -731,7 +733,8 @@ function syncRT(o) {
   }
   r.proxy.position.fromArray(o.pos);
   r.proxy.rotation.set(deg2rad(o.rot[0]), deg2rad(o.rot[1]), deg2rad(o.rot[2]), 'XYZ');
-  r.proxy.scale.fromArray(o.scl);
+  if (bent) r.proxy.scale.set(1, 1, 1);
+  else r.proxy.scale.fromArray(o.scl);
   r.proxy.visible = o.visible;
   applyLook(o);
 }
@@ -2671,7 +2674,7 @@ function scaleFrame() {
     const r = rt.get(o.id);
     if (!r || !r.geo || !r.geo.attributes.position || !r.geo.attributes.position.count) return null;
     if (!r.geo.boundingBox) r.geo.computeBoundingBox();
-    const s = new THREE.Vector3().fromArray(o.scl);
+    const s = isBent(o.type, o.params) ? new THREE.Vector3(1, 1, 1) : new THREE.Vector3().fromArray(o.scl);
     const min = r.geo.boundingBox.min.clone().multiply(s);
     const max = r.geo.boundingBox.max.clone().multiply(s);
     const Q = new THREE.Quaternion().setFromEuler(new THREE.Euler(deg2rad(o.rot[0]), deg2rad(o.rot[1]), deg2rad(o.rot[2]), 'XYZ'));
