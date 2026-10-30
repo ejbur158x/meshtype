@@ -1,6 +1,6 @@
 # Meshtype
 
-**v0.3.0.** A tiny browser mesh editor for squircles and glossy Frutiger Aero shapes. Solid and cutter parts, UNION / NEGATE / SPLIT, edge rounding, SVG extrusion, multi-select, and GLB export. No build step. Installable as an app and works offline.
+**v0.4.0.** A tiny browser mesh editor for squircles and glossy Frutiger Aero shapes. Solid and cutter parts, UNION / NEGATE / SPLIT, edge rounding, SVG extrusion, multi-select, and GLB export. No build step. Installable as an app and works offline.
 
 Made because Blender is overkill when all you need is a rounded panel with a dent in it.
 
@@ -21,13 +21,25 @@ Or push it to GitHub Pages as-is. Everything it needs is in this repo, including
 
 Meshtype doubles as a room blockout tool for Godot: build a room on a baseplate, export it as one GLB, and drop it into the game like a Lego piece.
 
-- **Floor ▾** (viewport toolbar): turn the baseplate on, set its size in meters, and pick a flooring: Aero carpet, Office tile, Glossy lab, Dark grid, Concrete. The top of the floor is at height 0.
+- **Floors** are their own layer: normal clicks, box select and drags never grab them, so you can't knock one out of place by accident. To edit them, press **B** (or Floor ▾ → Edit floors) to enter **Floor mode**: parts lock, the status bar turns yellow, and you can click a floor, slide it by dragging, or use the gizmo (1 move, 2 turn around Y, 3 resize). Ctrl-scaling works here too, so you can stretch one edge without moving the others. The inspector lists every floor with its flooring (Aero carpet, Office tile, Glossy lab, Dark grid, Concrete), size, position and turn. **Add floor** parks the new one against the east edge of the existing floors. Floors that overlap get a red outline and a warning, so rooms don't clip into each other. Press B again (or Esc twice) to go back to parts. Floor ▾ → Show floors hides them all.
 - **Grid**: 0.05, 0.25, 0.5, 1 or 2 m. With Snap on, moves snap to it. Keep every room on the same grid (1 m is a good default) so rooms line up when they are assembled.
 - **Drag on the ground**: left-drag a shape to slide it (and the rest of the selection) across the floor. Its height stays the same; use the gizmo's up arrow to change height.
-- **Godot collision** (next to Export): names every mesh with `-col`, so Godot's importer builds static collision for it automatically. The floor exports as `floor`.
-- The GLB's root node is named after the project and carries `meshtype` info (grid size, floor size) in its glTF extras.
+- **Godot collision** (next to Export): names every mesh with `-col`, so Godot's importer builds static collision for it automatically. Each floor exports as its own mesh, named after the floor.
+- The GLB's root node is named after the project and carries `meshtype` info (grid size, floor count) in its glTF extras.
 
 Units are meters on both sides, so a room exported here is to scale in Godot.
+
+### Lights
+
+**Light** and **Spot** (in Add shape, or right-click empty space) place real lights you can see in the viewport: color, brightness in candela, range, and for spots the cone angle and edge softness, plus a "casts shadows" flag. They export inside the GLB as glTF punctual lights, which Godot imports as `OmniLight3D` / `SpotLight3D`. Spots point along their local -Z; the yellow cone shows where.
+
+### Tags
+
+Every part, union and light can carry tags: `hall`, `door`, `archway`, `keycard`, `locked`, `spawn`, `trigger`, `alarm`, `camera`, `switch` and so on (or type your own, like `keycard:red`). With several things selected, a tag goes on all of them. Tags travel in the GLB (glTF extras on each node) and in the room JSON. Tag a part `no-collide` to export it without collision.
+
+### Room JSON
+
+With **Room JSON** ticked, Export GLB also downloads `room-name.room.json`. It lists every mesh and light by the exact node name used in the GLB (and the name Godot gives it after stripping `-col`), with its tags, transform, world bounds, material, light settings, the grid size and every floor (size, position, turn, flooring). It's meant for whoever assembles rooms in Godot (you, Claude, or Astra) to map nodes to scenes and scripts without guessing. Chrome may ask once to allow multiple downloads.
 
 ## The combine model
 
@@ -72,6 +84,8 @@ With several things selected the gizmo moves them together.
 | Key | Action |
 | --- | --- |
 | `1` `2` `3` | Move, Rotate, Scale gizmo |
+| `Ctrl` while scaling | Directional scale: the side opposite the handle you grab stays put, so the shape grows toward the drag instead of from the center |
+| `B` | Floor mode on/off |
 | `F` | Focus the camera on the selection (everything if nothing is selected) |
 | `C` | Duplicate |
 | `Esc` | Deselect |
@@ -152,7 +166,7 @@ The service worker caches the whole app. After you edit any file, regenerate the
 node tools/build-precache.mjs
 ```
 
-## Known limits (v0.3.0)
+## Known limits (v0.4.0)
 
 - Booleans are live, so keep Detail at 2 or 3 on dense scenes.
 - Scaling a rotated part from a multi-selection gizmo can introduce shear, which Meshtype can't store. Use Scale on single parts for that.

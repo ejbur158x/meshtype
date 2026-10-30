@@ -1,4 +1,4 @@
-// Meshtype v0.3.0
+// Meshtype v0.4.0
 // A small browser mesh editor: squircle primitives, union / negate / split,
 // edge rounding, SVG extrusion, GLB export.
 
@@ -14,7 +14,7 @@ import { inspectSvg, makeSvgGeometry } from './svg.js';
 import { roundMesh, boxUVs } from './rounder.js';
 import { FLOORS, floorMaterial } from './floor.js';
 
-const VERSION = '0.3.0';
+const VERSION = '0.4.0';
 const STORE_KEY = 'meshtype.autosave';
 
 const PRESETS = {
@@ -81,6 +81,7 @@ const el = {
   fileSky: $('#file-sky'),
   fileTex: $('#file-tex'),
   col: $('#chk-col'),
+  json: $('#chk-json'),
   progress: $('#progress'),
   strip: $('#chk-strip'),
   ctx: $('#ctx'),
@@ -123,21 +124,47 @@ function download(filename, data, type) {
  */
 
 const GRID_SIZES = [0.05, 0.25, 0.5, 1, 2];
-const DEFAULT_FLOOR = { on: false, w: 10, d: 10, preset: 'tile', grid: 0.5 };
+/** Project-wide floor settings: grid size and whether floors show. The floors themselves are state.floors. */
 function sanitizeFloor(f) {
   const src = f && typeof f === 'object' ? f : {};
   return {
-    on: src.on === true,
-    w: clamp(Number(src.w) || DEFAULT_FLOOR.w, 1, 200),
-    d: clamp(Number(src.d) || DEFAULT_FLOOR.d, 1, 200),
-    preset: FLOORS[src.preset] ? src.preset : DEFAULT_FLOOR.preset,
-    grid: GRID_SIZES.includes(Number(src.grid)) ? Number(src.grid) : DEFAULT_FLOOR.grid,
+    grid: GRID_SIZES.includes(Number(src.grid)) ? Number(src.grid) : 0.5,
+    show: src.show !== false,
   };
 }
+function sanitizeFloorItem(f) {
+  const src = f && typeof f === 'object' ? f : {};
+  const pos = Array.isArray(src.pos) && src.pos.length === 3 && src.pos.every(Number.isFinite) ? src.pos.slice() : [0, 0, 0];
+  return {
+    id: Number.isInteger(src.id) && src.id > 0 ? src.id : 0,
+    name: String(src.name || 'Floor').slice(0, 60),
+    pos,
+    rotY: Number.isFinite(Number(src.rotY)) ? Number(src.rotY) : 0,
+    w: clamp(Number(src.w) || 10, 0.5, 200),
+    d: clamp(Number(src.d) || 10, 0.5, 200),
+    preset: FLOORS[src.preset] ? src.preset : 'tile',
+  };
+}
+/** v0.3 had one baseplate in data.floor; v0.4 has a list. */
+function sanitizeFloors(data, nextId) {
+  let raw = Array.isArray(data.floors) ? data.floors : [];
+  if (!Array.isArray(data.floors) && data.floor && data.floor.on) raw = [{ name: 'Floor 1', w: data.floor.w, d: data.floor.d, preset: data.floor.preset }];
+  const out = [];
+  const used = new Set();
+  for (const r of raw) {
+    const f = sanitizeFloorItem(r);
+    if (!f.id || used.has(f.id)) f.id = nextId.value++;
+    used.add(f.id);
+    out.push(f);
+  }
+  return out;
+}
 
-let state = { name: 'untitled', nodes: [], assets: {}, sel: [], active: null, nextId: 1, floor: { ...DEFAULT_FLOOR } };
+let state = { name: 'untitled', nodes: [], assets: {}, sel: [], active: null, nextId: 1, floor: sanitizeFloor(), floors: [] };
 const view = {
   mode: 'translate',
+  floorMode: false,
+  floorSel: null,
   snap: true,
   result: true,
   cages: false,
@@ -153,7 +180,7 @@ const isGroup = (n) => !!n && n.kind === 'group';
 function leavesOf(id, out = []) {
   const n = node(id);
   if (!n) return out;
-  if (n.kind === 'part') out.push(n);
+  if (n.kind !== 'group') out.push(n); // parts and lights
   else for (const k of kidsOf(id)) leavesOf(k.id, out);
   return out;
 }
@@ -242,7 +269,53 @@ function sanitizePart(raw) {
   }
   const rd = sanitizeRound(raw.round);
   if (rd) o.round = rd;
+  const tg = sanitizeTags(raw.tags);
+  if (tg) o.tags = tg;
   return o;
+}
+
+const TAG_PRESETS = ['room', 'hall', 'door', 'archway', 'keycard', 'locked', 'window', 'vent', 'stairs', 'elevator', 'spawn', 'exit', 'trigger', 'alarm', 'camera', 'switch', 'prop', 'no-collide'];
+
+/** Tags: short lowercase labels for whoever builds the level in Godot (door, keycard:red, ...). */
+function sanitizeTags(t) {
+  if (!Array.isArray(t)) return undefined;
+  const out = [];
+  for (const x of t) {
+    const v = cleanTag(x);
+    if (v && !out.includes(v)) out.push(v);
+  }
+  return out.length ? out.slice(0, 16) : undefined;
+}
+function cleanTag(x) {
+  return String(x).toLowerCase().trim().replace(/\s+/g, '-').replace(/[^a-z0-9_:\-]/g, '').slice(0, 24);
+}
+
+function sanitizeLight(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const vec = (a, fallback) => (Array.isArray(a) && a.length === 3 && a.every((v) => Number.isFinite(v)) ? a.slice() : fallback.slice());
+  const lightType = raw.lightType === 'spot' ? 'spot' : 'point';
+  const num = (v, d, a, b) => clamp(Number.isFinite(Number(v)) && v !== null && v !== '' ? Number(v) : d, a, b);
+  const l = {
+    kind: 'light',
+    id: Number.isInteger(raw.id) && raw.id > 0 ? raw.id : 0,
+    name: String(raw.name || 'Light').slice(0, 60),
+    lightType,
+    color: /^#[0-9a-f]{6}$/i.test(raw.color || '') ? raw.color : '#fff1dc',
+    intensity: num(raw.intensity, lightType === 'spot' ? 60 : 25, 0, 5000),
+    range: num(raw.range, 10, 0, 200),
+    angle: num(raw.angle, 35, 1, 89),
+    penumbra: num(raw.penumbra, 0.3, 0, 1),
+    shadows: raw.shadows !== false,
+    pos: vec(raw.pos, [0, 2.4, 0]),
+    rot: vec(raw.rot, [0, 0, 0]),
+    scl: [1, 1, 1],
+    neg: false,
+    parent: null,
+    visible: raw.visible !== false,
+  };
+  const tg = sanitizeTags(raw.tags);
+  if (tg) l.tags = tg;
+  return l;
 }
 
 function sanitizeGroup(raw) {
@@ -258,6 +331,8 @@ function sanitizeGroup(raw) {
   };
   const rd = sanitizeRound(raw.round);
   if (rd) g.round = rd;
+  const tg = sanitizeTags(raw.tags);
+  if (tg) g.tags = tg;
   return g;
 }
 
@@ -282,7 +357,7 @@ function sanitizeProject(data) {
   const nodes = [];
   const used = new Set();
   for (const raw of rawNodes) {
-    const n = raw && raw.kind === 'group' ? sanitizeGroup(raw) : sanitizePart(raw);
+    const n = raw && raw.kind === 'group' ? sanitizeGroup(raw) : raw && raw.kind === 'light' ? sanitizeLight(raw) : sanitizePart(raw);
     if (!n) continue;
     if (!n.id || used.has(n.id)) n.id = 0;
     if (n.id) used.add(n.id);
@@ -301,7 +376,7 @@ function sanitizeProject(data) {
   for (const n of nodes) {
     if (n.parent != null) {
       const p = byIdMap.get(n.parent);
-      if (!p || p.kind !== 'group' || p === n) n.parent = null;
+      if (!p || p.kind !== 'group' || p === n || n.kind === 'light') n.parent = null;
     }
   }
   for (const n of nodes) {
@@ -372,24 +447,123 @@ scene.add(sun);
 
 let grid = null;
 let gridKey = '';
-const floorMesh = new THREE.Mesh(new THREE.BoxGeometry(1, 0.06, 1), floorMaterial('tile'));
-floorMesh.position.y = -0.03;
-floorMesh.visible = false;
-scene.add(floorMesh);
 
-/** Baseplate + grid lines + move snapping, all from state.floor. */
-function syncFloor() {
-  const f = state.floor;
-  floorMesh.visible = f.on;
-  floorMesh.scale.set(f.w, 1, f.d);
-  const mat = floorMaterial(f.preset);
-  floorMesh.material = mat;
-  const tile = FLOORS[f.preset].tile;
-  mat.map.repeat.set(f.w / tile, f.d / tile);
-  const size = f.on ? Math.max(f.w, f.d) : 20;
-  let step = f.grid;
-  while (size / step > 400) step *= 2; // keep the line count sane
-  const key = `${size}|${step}|${f.on}`;
+/* ---- baseplates: their own layer, only editable in Floor mode ---- */
+
+/** floor id -> { mesh, edges, preset } ; the mesh is a unit slab, top face at local y = 0 */
+const frt = new Map();
+const slabGeo = (() => {
+  const g = new THREE.BoxGeometry(1, 0.06, 1);
+  g.translate(0, -0.03, 0);
+  return g;
+})();
+const slabEdges = new THREE.EdgesGeometry(slabGeo);
+const floorEdgeMat = {
+  idle: new THREE.LineBasicMaterial({ color: 0x5aa7e6, transparent: true, opacity: 0.6 }),
+  sel: new THREE.LineBasicMaterial({ color: 0x0a7fe0, depthTest: false }),
+  bad: new THREE.LineBasicMaterial({ color: 0xff3048, depthTest: false }),
+};
+const floorById = (id) => state.floors.find((f) => f.id === id);
+
+function floorCorners(f) {
+  const a = deg2rad(f.rotY);
+  const c = Math.cos(a);
+  const s = Math.sin(a);
+  return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => {
+    const x = (u * f.w) / 2;
+    const z = (v * f.d) / 2;
+    return [f.pos[0] + x * c + z * s, f.pos[2] - x * s + z * c];
+  });
+}
+
+/** True when two floors at the same height overlap (sharing an edge is fine). */
+function floorsOverlap(a, b) {
+  if (Math.abs(a.pos[1] - b.pos[1]) > 0.05) return false;
+  const A = floorCorners(a);
+  const B = floorCorners(b);
+  for (const poly of [A, B]) {
+    for (let i = 0; i < 4; i++) {
+      const p = poly[i];
+      const q = poly[(i + 1) % 4];
+      const nx = q[1] - p[1];
+      const nz = p[0] - q[0];
+      const proj = (P) => P.map((v) => v[0] * nx + v[1] * nz);
+      const pa = proj(A);
+      const pb = proj(B);
+      const len = Math.hypot(nx, nz) || 1;
+      if (Math.min(...pa) >= Math.max(...pb) - 1e-3 * len || Math.min(...pb) >= Math.max(...pa) - 1e-3 * len) return false;
+    }
+  }
+  return true;
+}
+
+function overlappingFloors() {
+  const bad = new Set();
+  const fl = state.floors;
+  for (let i = 0; i < fl.length; i++) {
+    for (let j = i + 1; j < fl.length; j++) {
+      if (floorsOverlap(fl[i], fl[j])) {
+        bad.add(fl[i].id);
+        bad.add(fl[j].id);
+      }
+    }
+  }
+  return bad;
+}
+
+function floorMat(preset, f) {
+  const m = floorMaterial(preset).clone();
+  m.map = m.map.clone();
+  if (m.emissiveMap) m.emissiveMap = m.map;
+  const tile = FLOORS[preset].tile;
+  m.map.repeat.set(f.w / tile, f.d / tile);
+  return m;
+}
+
+function syncFloors() {
+  const bad = overlappingFloors();
+  for (const [id, r] of frt) {
+    if (!floorById(id)) {
+      scene.remove(r.mesh);
+      r.mesh.material.dispose();
+      frt.delete(id);
+    }
+  }
+  for (const f of state.floors) {
+    let r = frt.get(f.id);
+    if (!r) {
+      const mesh = new THREE.Mesh(slabGeo, floorMat(f.preset, f));
+      mesh.userData.floorId = f.id;
+      const edges = new THREE.LineSegments(slabEdges, floorEdgeMat.idle);
+      edges.renderOrder = 12;
+      mesh.add(edges);
+      scene.add(mesh);
+      r = { mesh, edges, preset: f.preset };
+      frt.set(f.id, r);
+    }
+    if (r.preset !== f.preset) {
+      r.mesh.material.dispose();
+      r.mesh.material = floorMat(f.preset, f);
+      r.preset = f.preset;
+    }
+    r.mesh.position.fromArray(f.pos);
+    r.mesh.rotation.set(0, deg2rad(f.rotY), 0);
+    r.mesh.scale.set(f.w, 1, f.d);
+    const tile = FLOORS[f.preset].tile;
+    r.mesh.material.map.repeat.set(f.w / tile, f.d / tile);
+    r.mesh.visible = state.floor.show;
+    const sel = view.floorMode && view.floorSel === f.id;
+    r.edges.material = bad.has(f.id) ? floorEdgeMat.bad : sel ? floorEdgeMat.sel : floorEdgeMat.idle;
+    r.edges.visible = bad.has(f.id) || view.floorMode;
+  }
+  // grid lines cover every floor (or 20 m when there are none)
+  let ext = 10;
+  for (const f of state.floors) for (const [x, z] of floorCorners(f)) ext = Math.max(ext, Math.abs(x), Math.abs(z));
+  const has = state.floors.length > 0 && state.floor.show;
+  const size = Math.ceil(ext) * 2;
+  let step = state.floor.grid;
+  while (size / step > 400) step *= 2;
+  const key = `${size}|${step}|${has}`;
   if (key !== gridKey) {
     gridKey = key;
     if (grid) {
@@ -398,15 +572,16 @@ function syncFloor() {
       grid.material.dispose();
     }
     const div = Math.max(1, Math.round(size / step));
-    grid = new THREE.GridHelper(div * step, div, f.on ? 0x1f6fb0 : 0x2f8fcf, f.on ? 0x5d8fb5 : 0x8fc4e4);
+    grid = new THREE.GridHelper(div * step, div, has ? 0x1f6fb0 : 0x2f8fcf, has ? 0x5d8fb5 : 0x8fc4e4);
     grid.material.transparent = true;
-    grid.material.opacity = f.on ? 0.35 : 0.45;
-    grid.position.y = f.on ? 0.003 : 0;
+    grid.material.opacity = has ? 0.3 : 0.45;
+    grid.position.y = has ? 0.003 : 0;
     scene.add(grid);
   }
   if (typeof applySnap === 'function') applySnap();
   const gs = document.querySelector('#grid-size');
-  if (gs) gs.value = String(f.grid);
+  if (gs) gs.value = String(state.floor.grid);
+  return bad;
 }
 
 const orbit = new OrbitControls(camera, el.canvas);
@@ -600,6 +775,11 @@ function syncCages() {
     r.wire.visible = showWire;
     r.fill.visible = showFill;
   }
+  for (const [id, r] of lrt) {
+    const on = direct.has(id);
+    r.sel.visible = on;
+    if (r.cone) r.cone.visible = on || view.cages;
+  }
   decorateUnits();
 }
 
@@ -673,6 +853,8 @@ function syncVisibility() {
 
 function syncAll() {
   for (const o of state.nodes) if (o.kind === 'part') syncRT(o);
+  for (const o of state.nodes) if (o.kind === 'light') syncLight(o);
+  for (const id of [...lrt.keys()]) if (!state.nodes.some((n) => n.id === id && n.kind === 'light')) disposeLight(id);
   syncCages();
   syncVisibility();
   planeDirty = true;
@@ -680,6 +862,7 @@ function syncAll() {
 
 function clearRT() {
   transform.detach();
+  for (const id of [...lrt.keys()]) disposeLight(id);
   for (const r of rt.values()) {
     partsGroup.remove(r.proxy);
     if (r.geo) r.geo.dispose();
@@ -698,6 +881,104 @@ function clearRT() {
 /* gizmo                                                               */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* lights                                                              */
+/* ------------------------------------------------------------------ */
+
+/** light id -> { holder, light, bulb, sel, cone, type, proxy } */
+const lrt = new Map();
+const bulbGeo = new THREE.SphereGeometry(0.09, 16, 12);
+const bulbSelGeo = new THREE.SphereGeometry(0.15, 12, 8);
+const coneGeo = (() => {
+  const g = new THREE.ConeGeometry(1, 1, 20, 1, true);
+  g.translate(0, -0.5, 0);
+  g.rotateX(Math.PI / 2); // apex at the origin, opening toward -Z (where glTF spots point)
+  return g;
+})();
+const coneMat = new THREE.MeshBasicMaterial({ color: 0xffd36b, wireframe: true, transparent: true, opacity: 0.35, depthWrite: false });
+
+function disposeLight(id) {
+  const r = lrt.get(id);
+  if (!r) return;
+  scene.remove(r.holder);
+  r.bulb.material.dispose();
+  r.light.dispose();
+  lrt.delete(id);
+}
+
+function ensureLight(o) {
+  let r = lrt.get(o.id);
+  if (r && r.type === o.lightType) return r;
+  if (r) disposeLight(o.id);
+  const holder = new THREE.Object3D();
+  const light = o.lightType === 'spot' ? new THREE.SpotLight() : new THREE.PointLight();
+  if (o.lightType === 'spot') {
+    const t = new THREE.Object3D();
+    t.position.set(0, 0, -1);
+    light.add(t);
+    light.target = t;
+  }
+  holder.add(light);
+  const bulb = new THREE.Mesh(bulbGeo, new THREE.MeshBasicMaterial({ color: 0xffffff }));
+  bulb.userData.id = o.id;
+  const sel = new THREE.Mesh(bulbSelGeo, ghost.wireSel);
+  sel.renderOrder = 10;
+  holder.add(bulb, sel);
+  let cone = null;
+  if (o.lightType === 'spot') {
+    cone = new THREE.Mesh(coneGeo, coneMat);
+    holder.add(cone);
+  }
+  scene.add(holder);
+  r = { holder, light, bulb, sel, cone, type: o.lightType, proxy: bulb };
+  lrt.set(o.id, r);
+  return r;
+}
+
+function syncLight(o) {
+  const r = ensureLight(o);
+  r.holder.position.fromArray(o.pos);
+  r.holder.rotation.set(deg2rad(o.rot[0]), deg2rad(o.rot[1]), deg2rad(o.rot[2]), 'XYZ');
+  r.holder.visible = o.visible;
+  r.light.color.set(o.color);
+  r.light.intensity = o.intensity;
+  r.light.distance = o.range;
+  r.light.decay = 2;
+  r.bulb.material.color.set(o.color);
+  if (r.cone) {
+    r.light.angle = deg2rad(o.angle);
+    r.light.penumbra = o.penumbra;
+    const len = 1.2;
+    const rad = Math.tan(deg2rad(o.angle)) * len;
+    r.cone.scale.set(rad, rad, len);
+  }
+}
+
+function syncNode(o) {
+  if (o.kind === 'light') syncLight(o);
+  else syncRT(o);
+}
+
+function proxyOf(o) {
+  if (o.kind === 'light') return lrt.get(o.id) ? lrt.get(o.id).proxy : null;
+  return rt.get(o.id) ? rt.get(o.id).proxy : null;
+}
+
+function addLight(type) {
+  const id = state.nextId;
+  const o = sanitizeLight({
+    id: state.nextId++,
+    name: `${type === 'spot' ? 'Spot' : 'Light'} ${id}`,
+    lightType: type,
+    pos: [0, 2.4, 0],
+    rot: type === 'spot' ? [-90, 0, 0] : [0, 0, 0],
+  });
+  state.nodes.push(o);
+  state.sel = [o.id];
+  state.active = o.id;
+  afterEdit();
+}
+
 function worldMatrixOf(o) {
   return new THREE.Matrix4().compose(
     new THREE.Vector3().fromArray(o.pos),
@@ -707,6 +988,10 @@ function worldMatrixOf(o) {
 }
 
 function leafBox(o) {
+  if (o.kind === 'light') {
+    const c = new THREE.Vector3().fromArray(o.pos);
+    return new THREE.Box3(c.clone().subScalar(0.1), c.clone().addScalar(0.1));
+  }
   const r = rt.get(o.id);
   const box = new THREE.Box3();
   if (!r || !r.geo || !r.geo.attributes.position || !r.geo.attributes.position.count) return box;
@@ -730,6 +1015,8 @@ function recenterPivot() {
 }
 
 function attachGizmo() {
+  if (view.floorMode) return attachFloorGizmo();
+  transform.showX = transform.showY = transform.showZ = true;
   const lv = selLeaves().filter((o) => o.visible);
   if (!lv.length) {
     transform.detach();
@@ -737,7 +1024,7 @@ function attachGizmo() {
   }
   const single = liveSel().length === 1 && lv.length === 1 && !isGroup(node(liveSel()[0]));
   if (single) {
-    transform.attach(rt.get(lv[0].id).proxy);
+    transform.attach(lv[0].kind === 'light' ? lrt.get(lv[0].id).holder : rt.get(lv[0].id).proxy);
     transform.setSpace(view.mode === 'scale' ? 'local' : 'world');
   } else {
     recenterPivot();
@@ -747,8 +1034,56 @@ function attachGizmo() {
 }
 
 let dragStart = null;
+let scaleStart = null;
+
+/** Remember where a scale drag started, so Ctrl can pin the opposite side. */
+function beginScale() {
+  const obj = transform.object;
+  if (!obj || view.mode !== 'scale') return null;
+  const axes = String(transform.axis || '').replace(/[^XYZ]/g, '');
+  if (!axes) return null;
+  obj.updateMatrixWorld(true);
+  let box;
+  if (obj.userData.floorId) {
+    box = new THREE.Box3(new THREE.Vector3(-0.5, -0.06, -0.5), new THREE.Vector3(0.5, 0, 0.5));
+  } else if (obj === pivot) {
+    box = boxOf(selLeaves().filter((o) => o.visible));
+    box.translate(pivot.position.clone().negate());
+  } else {
+    const o = node(liveSel()[0]);
+    const r = o && rt.get(o.id);
+    if (!r || !r.geo) return null;
+    if (!r.geo.boundingBox) r.geo.computeBoundingBox();
+    box = r.geo.boundingBox.clone();
+  }
+  const dirs = [];
+  for (const ch of axes) {
+    const i = 'XYZ'.indexOf(ch);
+    const dir = new THREE.Vector3().setComponent(i, 1).applyQuaternion(obj.quaternion);
+    const sign = Math.sign(transform.pointStart.dot(dir)) || 1;
+    dirs.push({ i, dir, anchor: sign > 0 ? box.min.getComponent(i) : box.max.getComponent(i) });
+  }
+  return { obj, pos: obj.position.clone(), scl: obj.scale.clone(), dirs };
+}
+
+/** Ctrl held while scaling: keep the far side fixed and grow toward the drag. */
+function applyDirectionalScale() {
+  const st = scaleStart;
+  if (!st || transform.object !== st.obj) return;
+  const p = st.pos.clone();
+  if (fly.ctrl) {
+    for (const d of st.dirs) {
+      const s0 = st.scl.getComponent(d.i);
+      const s1 = st.obj.scale.getComponent(d.i);
+      p.addScaledVector(d.dir, d.anchor * (s0 - s1));
+    }
+  }
+  st.obj.position.copy(p);
+}
+
 transform.addEventListener('dragging-changed', (e) => {
   orbit.enabled = !e.value;
+  scaleStart = e.value ? beginScale() : null;
   if (e.value) {
     if (transform.object === pivot) {
       pivot.updateMatrix();
@@ -765,6 +1100,11 @@ transform.addEventListener('dragging-changed', (e) => {
 });
 
 transform.addEventListener('objectChange', () => {
+  applyDirectionalScale();
+  if (transform.object && transform.object.userData.floorId) {
+    floorFromGizmo(transform.object);
+    return;
+  }
   if (transform.object === pivot && dragStart) {
     pivot.updateMatrix();
     const delta = pivot.matrix.clone().multiply(dragStart.inv);
@@ -777,14 +1117,23 @@ transform.addEventListener('objectChange', () => {
       eu.setFromQuaternion(q, 'XYZ');
       o.pos = [round(p.x), round(p.y), round(p.z)];
       o.rot = [round(rad2deg(eu.x), 2), round(rad2deg(eu.y), 2), round(rad2deg(eu.z), 2)];
-      o.scl = [round(Math.max(0.01, s.x)), round(Math.max(0.01, s.y)), round(Math.max(0.01, s.z))];
-      syncRT(o);
+      if (o.kind !== 'light') o.scl = [round(Math.max(0.01, s.x)), round(Math.max(0.01, s.y)), round(Math.max(0.01, s.z))];
+      syncNode(o);
     }
     requestSolve();
     planeDirty = true;
     return;
   }
   const o = liveSel().length === 1 ? node(liveSel()[0]) : null;
+  if (o && o.kind === 'light' && lrt.get(o.id)) {
+    const h = lrt.get(o.id).holder;
+    h.scale.set(1, 1, 1);
+    o.pos = [round(h.position.x), round(h.position.y), round(h.position.z)];
+    o.rot = [round(rad2deg(h.rotation.x), 2), round(rad2deg(h.rotation.y), 2), round(rad2deg(h.rotation.z), 2)];
+    updateXformFields(o);
+    planeDirty = true;
+    return;
+  }
   const r = o && o.kind === 'part' && rt.get(o.id);
   if (!r) return;
   const p = r.proxy;
@@ -945,7 +1294,7 @@ function solve() {
   const tops = state.nodes.filter((n) => n.parent == null);
   const alive = new Set();
   for (const n of tops) {
-    if (!n.visible || (n.neg && !isGroup(n))) continue;
+    if (n.kind === 'light' || !n.visible || (n.neg && !isGroup(n))) continue;
     alive.add(n.id);
     const sig = sigOf(n.id);
     let u = units.get(n.id);
@@ -1225,7 +1574,7 @@ async function settleRounds() {
 const hist = { stack: [], i: -1 };
 
 function projectData() {
-  return { app: 'meshtype', version: VERSION, name: state.name, nextId: state.nextId, nodes: state.nodes, assets: state.assets, floor: state.floor };
+  return { app: 'meshtype', version: VERSION, name: state.name, nextId: state.nextId, nodes: state.nodes, assets: state.assets, floor: state.floor, floors: state.floors };
 }
 
 function snapshot() {
@@ -1267,6 +1616,7 @@ function undo() {
   hist.i--;
   restore(JSON.parse(hist.stack[hist.i]));
   persist();
+  if (view.floorMode) attachFloorGizmo();
 }
 
 function redo() {
@@ -1299,9 +1649,14 @@ function restore(data) {
     active: ids.has(data.active) && sel.includes(data.active) ? data.active : sel[sel.length - 1] ?? null,
     nextId: p.nextId,
     floor: sanitizeFloor(data.floor),
+    floors: [],
   };
+  const counter = { value: state.nextId };
+  state.floors = sanitizeFloors(data, counter);
+  state.nextId = Math.max(state.nextId, counter.value, ...state.floors.map((f) => f.id + 1));
+  if (view.floorSel != null && !floorById(view.floorSel)) view.floorSel = null;
   el.name.value = state.name;
-  syncFloor();
+  syncFloors();
   renderFloorPanel();
   syncAll();
   attachGizmo();
@@ -1377,6 +1732,7 @@ function removeNodes(ids) {
   const all = new Set();
   for (const id of ids) for (const d of descendantIds(id)) all.add(d);
   for (const id of all) {
+    disposeLight(id);
     const r = rt.get(id);
     if (r) {
       partsGroup.remove(r.proxy);
@@ -1406,8 +1762,8 @@ function duplicateSelection() {
     raw.id = state.nextId++;
     raw.parent = parent;
     if (offset) raw.name = `${src.name} copy`;
-    const c = src.kind === 'group' ? sanitizeGroup(raw) : sanitizePart(raw);
-    if (c.kind === 'part' && offset) c.pos = [round(c.pos[0] + 0.15), c.pos[1], round(c.pos[2] + 0.15)];
+    const c = src.kind === 'group' ? sanitizeGroup(raw) : src.kind === 'light' ? sanitizeLight(raw) : sanitizePart(raw);
+    if (c.kind !== 'group' && offset) c.pos = [round(c.pos[0] + 0.15), c.pos[1], round(c.pos[2] + 0.15)];
     if (c.kind === 'part' && !offset) c.pos = [...src.pos].map((v, i) => (i === 0 || i === 2 ? round(v + 0.15) : v));
     state.nodes.push(c);
     if (src.kind === 'group') for (const k of kidsOf(src.id)) clone(k, c.id, false);
@@ -1437,7 +1793,7 @@ function hideSelection() {
 /* --- the three main buttons --- */
 
 function doUnion(mode = 'union') {
-  const tops = uniqueTops();
+  const tops = uniqueTops().filter((t) => t.kind !== 'light');
   if (tops.length < 2) {
     toast(`Pick two or more things first (Ctrl or Shift + click), then ${mode === 'int' ? 'INTERSECT' : 'UNION'}.`);
     return;
@@ -1472,7 +1828,8 @@ function doNegate() {
     toast('Select something to negate.');
     return;
   }
-  const nodes = ids.map(node);
+  const nodes = ids.map(node).filter((n) => n.kind !== 'light');
+  if (!nodes.length) return toast('Lights cannot be cutters.');
   const makeNeg = nodes.some((n) => !n.neg);
   for (const n of nodes) {
     n.neg = makeNeg;
@@ -1662,6 +2019,7 @@ function renderBoolButtons() {
 }
 
 function iconFor(n) {
+  if (n.kind === 'light') return 'i-light';
   if (n.kind === 'group') return n.neg ? 'i-group-neg' : 'i-group';
   return n.neg ? 'i-cutter' : 'i-solid';
 }
@@ -1671,8 +2029,8 @@ function renderList() {
   const selSet = new Set(liveSel());
   const emit = (n, depth) => {
     const isSel = selSet.has(n.id);
-    const chip = n.kind === 'group' ? (n.mode === 'int' ? 'INTERSECT' : n.neg ? 'CUTTER' : 'UNION') : n.neg ? 'CUTTER' : 'SOLID';
-    const chipCls = n.neg ? 'neg' : n.kind === 'group' ? 'grp' : 'pos';
+    const chip = n.kind === 'light' ? (n.lightType === 'spot' ? 'SPOT' : 'LIGHT') : n.kind === 'group' ? (n.mode === 'int' ? 'INTERSECT' : n.neg ? 'CUTTER' : 'UNION') : n.neg ? 'CUTTER' : 'SOLID';
+    const chipCls = n.kind === 'light' ? 'lit' : n.neg ? 'neg' : n.kind === 'group' ? 'grp' : 'pos';
     rows.push(`<li class="row d${Math.min(depth, 3)} ${isSel ? 'sel' : ''} ${n.visible ? '' : 'off'}" data-id="${n.id}">
   <button type="button" class="eye" data-act="vis" title="${n.visible ? 'Hide' : 'Show'}" aria-label="${n.visible ? 'Hide' : 'Show'} ${esc(n.name)}">${n.visible ? '◉' : '○'}</button>
   <svg class="rico" aria-hidden="true"><use href="#${iconFor(n)}"/></svg>
@@ -1757,7 +2115,35 @@ ${anyTex ? `<label class="sl"><span class="lb">Tile size</span><output id="out-t
 <input type="range" data-texsize="1" min="0.05" max="4" step="0.05" value="${size}"></label>` : ''}`;
 }
 
+/** Tag chips + add box. With several things selected, it shows the tags they share and adds to all. */
+function tagsHTML(nodes) {
+  const shared = (nodes[0].tags || []).filter((t) => nodes.every((n) => (n.tags || []).includes(t)));
+  const chips = shared.map((t) => `<span class="tag">${esc(t)}<button type="button" data-untag="${esc(t)}" aria-label="Remove tag ${esc(t)}">×</button></span>`).join('');
+  return `<h2>Tags <span class="sub">(for Godot: door, hall, keycard:red…)</span></h2>
+<div class="tags">${chips || '<span class="sub">No tags yet.</span>'}</div>
+<div class="inline tagadd"><input id="f-tag" type="text" list="tag-presets" maxlength="24" placeholder="Add a tag" aria-label="Add a tag" spellcheck="false"><button type="button" data-act="tag">Add</button></div>`;
+}
+
+function lightHTML(n) {
+  const sl = (key, label, min, max, step, dec) => `<label class="sl"><span class="lb">${label}</span><output id="out-l-${key}">${Number(n[key]).toFixed(dec)}</output>
+<input type="range" data-light="${key}" min="${min}" max="${max}" step="${step}" value="${n[key]}"></label>`;
+  return `<h2>Light</h2>
+<div class="field"><div class="seg wide2">
+  <button type="button" data-ltype="point" aria-pressed="${n.lightType === 'point'}">Point</button>
+  <button type="button" data-ltype="spot" aria-pressed="${n.lightType === 'spot'}">Spot</button></div></div>
+<div class="field"><span class="lbl">Color</span><input id="l-color" type="color" value="${n.color}" aria-label="Light color"></div>
+${sl('intensity', 'Brightness (candela)', 0, 500, 1, 0)}
+${sl('range', 'Range in meters (0 = no limit)', 0, 40, 0.5, 1)}
+${n.lightType === 'spot' ? sl('angle', 'Cone angle°', 5, 89, 1, 0) + sl('penumbra', 'Edge softness', 0, 1, 0.05, 2) : ''}
+<label class="chk"><input id="l-shadows" type="checkbox" ${n.shadows ? 'checked' : ''}> Casts shadows (in Godot)</label>
+<p class="tip">Exported in the GLB as a real light (Godot imports it as an ${n.lightType === 'spot' ? 'SpotLight3D' : 'OmniLight3D'}) and listed in the room JSON.</p>`;
+}
+
 function renderInspector() {
+  if (view.floorMode) {
+    el.inspector.innerHTML = floorInspectorHTML();
+    return;
+  }
   const sel = liveSel();
   if (!sel.length) {
     el.inspector.innerHTML = '<h2>Inspector</h2><p class="hint">Click a shape in the list or the viewport. Ctrl or Shift + click to pick several.</p>';
@@ -1766,12 +2152,24 @@ function renderInspector() {
   if (sel.length > 1) {
     const leaves = selLeaves().length;
     el.inspector.innerHTML = `<h2>${sel.length} selected</h2>
-<p class="hint">${leaves} part${leaves === 1 ? '' : 's'}. Drag the gizmo to move them together.</p>
+<p class="hint">${leaves} item${leaves === 1 ? '' : 's'}. Drag the gizmo to move them together.</p>
+${tagsHTML(sel.map(node))}
 ${arrangeHTML()}
 <div class="acts"><button type="button" data-act="dup">Duplicate</button><button type="button" data-act="del" class="danger">Delete</button></div>`;
     return;
   }
   const n = node(sel[0]);
+  if (n.kind === 'light') {
+    el.inspector.innerHTML = `<h2>${n.lightType === 'spot' ? 'Spot light' : 'Point light'}</h2>
+<div class="field"><input id="f-name" type="text" maxlength="60" value="${esc(n.name)}" aria-label="Name" spellcheck="false"></div>
+${lightHTML(n)}
+<h2>Transform</h2>
+${xformRow(n, 'Move', 'pos', 0.05)}${xformRow(n, 'Rotate°', 'rot', 5)}
+${tagsHTML([n])}
+${arrangeHTML()}
+<div class="acts"><button type="button" data-act="dup">Duplicate</button><button type="button" data-act="del" class="danger">Delete</button></div>`;
+    return;
+  }
   const kind = n.neg ? 'Cutter' : 'Solid';
   const head = `<h2>${isGroup(n) ? (n.mode === 'int' ? 'Intersection' : 'Union') : 'Part'}</h2>
 <div class="field"><input id="f-name" type="text" maxlength="60" value="${esc(n.name)}" aria-label="Name" spellcheck="false"></div>
@@ -1787,6 +2185,7 @@ ${arrangeHTML()}
 Click a part in the list to edit it, or SPLIT to take it apart.</p>
 ${lookHTML(leavesOf(n.id))}
 ${n.parent == null ? roundHTML(n) : ''}
+${tagsHTML([n])}
 ${arrangeHTML()}
 <div class="acts"><button type="button" data-act="split">Split</button><button type="button" data-act="dup">Duplicate</button><button type="button" data-act="del" class="danger">Delete</button></div>`;
     return;
@@ -1800,6 +2199,7 @@ ${sliders}${tip}
 ${xformRow(n, 'Move', 'pos', 0.05)}${xformRow(n, 'Rotate°', 'rot', 5)}${xformRow(n, 'Scale', 'scl', 0.05)}
 ${lookHTML([n])}
 ${roundHTML(n)}
+${tagsHTML([n])}
 ${arrangeHTML()}
 <div class="acts"><button type="button" data-act="dup">Duplicate</button><button type="button" data-act="del" class="danger">Delete</button></div>`;
 }
@@ -1816,6 +2216,7 @@ function updateXformFields(o) {
 /* ------------------------------------------------------------------ */
 
 document.querySelectorAll('[data-add]').forEach((b) => b.addEventListener('click', () => addObject(b.dataset.add)));
+document.querySelectorAll('[data-add-light]').forEach((b) => b.addEventListener('click', () => addLight(b.dataset.addLight)));
 el.union.addEventListener('click', () => doUnion('union'));
 el.intersect.addEventListener('click', () => doUnion('int'));
 el.negate.addEventListener('click', doNegate);
@@ -1850,6 +2251,16 @@ el.list.addEventListener('contextmenu', (e) => {
 el.inspector.addEventListener('input', (e) => {
   const t = e.target;
   const n = state.sel.length === 1 ? node(state.sel[0]) : null;
+  if (n && n.kind === 'light' && (t.dataset.light || t.id === 'l-color')) {
+    if (t.id === 'l-color') n.color = t.value;
+    else {
+      n[t.dataset.light] = parseFloat(t.value);
+      const out = $(`#out-l-${t.dataset.light}`);
+      if (out) out.textContent = parseFloat(t.value).toFixed(t.step >= 1 ? 0 : t.step >= 0.1 ? 1 : 2);
+    }
+    syncLight(n);
+    return;
+  }
   if (t.dataset.round && n) {
     const out = $(`#out-${t.dataset.round}`);
     if (out) out.textContent = parseFloat(t.value).toFixed(t.dataset.round === 'sand' ? 0 : 3);
@@ -1895,6 +2306,19 @@ el.inspector.addEventListener('input', (e) => {
 
 el.inspector.addEventListener('change', (e) => {
   const t = e.target;
+  if (t.dataset.light || t.id === 'l-color') {
+    commit();
+    return;
+  }
+  if (t.id === 'l-shadows') {
+    const n = node(state.sel[0]);
+    if (n && n.kind === 'light') {
+      n.shadows = t.checked;
+      commit();
+    }
+    return;
+  }
+  if (t.id === 'f-tag') return;
   if (t.dataset.caxis) {
     view.center[t.dataset.caxis] = t.checked;
     return;
@@ -1924,7 +2348,7 @@ el.inspector.addEventListener('change', (e) => {
   }
   if (t.dataset.param || t.id === 'f-name' || t.id === 'f-color' || t.dataset.texsize) {
     commit();
-  } else if (t.dataset.t && n.kind === 'part') {
+  } else if (t.dataset.t && n.kind !== 'group') {
     const key = t.dataset.t;
     const i = Number(t.dataset.i);
     let v = parseFloat(t.value);
@@ -1932,7 +2356,7 @@ el.inspector.addEventListener('change', (e) => {
     if (key === 'scl') v = Math.max(0.01, v);
     n[key][i] = v;
     t.value = fmt(v, 3);
-    syncRT(n);
+    syncNode(n);
     requestSolve();
     planeDirty = true;
     commit();
@@ -1948,7 +2372,51 @@ el.inspector.addEventListener('change', (e) => {
   }
 });
 
+el.inspector.addEventListener('keydown', (e) => {
+  if (e.target.id === 'f-tag' && e.key === 'Enter') {
+    e.preventDefault();
+    addTagFromInput();
+  }
+});
+
+function addTagFromInput() {
+  const input = $('#f-tag');
+  const tag = input ? cleanTag(input.value) : '';
+  if (!tag) return;
+  for (const n of liveSel().map(node)) {
+    n.tags = sanitizeTags([...(n.tags || []), tag]);
+  }
+  commit();
+  renderInspector();
+  const again = $('#f-tag');
+  if (again) again.focus();
+}
+
 el.inspector.addEventListener('click', (e) => {
+  const untag = e.target.closest('[data-untag]');
+  if (untag) {
+    for (const n of liveSel().map(node)) {
+      const next = (n.tags || []).filter((t) => t !== untag.dataset.untag);
+      if (next.length) n.tags = next;
+      else delete n.tags;
+    }
+    commit();
+    renderInspector();
+    return;
+  }
+  const lt = e.target.closest('[data-ltype]');
+  if (lt) {
+    const n = node(state.sel[0]);
+    if (n && n.kind === 'light' && n.lightType !== lt.dataset.ltype) {
+      n.lightType = lt.dataset.ltype;
+      if (n.lightType === 'spot' && n.rot.every((v) => v === 0)) n.rot = [-90, 0, 0];
+      syncLight(n);
+      attachGizmo();
+      commit();
+      renderInspector();
+    }
+    return;
+  }
   const axisBtn = e.target.closest('[data-axis]');
   if (axisBtn) {
     const ax = axisBtn.dataset.axis;
@@ -1993,6 +2461,9 @@ function runAction(a) {
     }
   } else if (a === 'svg') el.fileSvg.click();
   else if (a === 'tex') el.fileTex.click();
+  else if (a === 'tag') addTagFromInput();
+  else if (a === 'light:point') addLight('point');
+  else if (a === 'light:spot') addLight('spot');
   else if (a === 'tex-clear') {
     const n = state.sel.length === 1 ? node(state.sel[0]) : null;
     if (n) {
@@ -2022,6 +2493,7 @@ el.name.addEventListener('change', commit);
 function setMode(mode) {
   view.mode = mode;
   transform.setMode(mode);
+  if (view.floorMode) attachFloorGizmo();
   transform.setSpace(mode === 'scale' && transform.object !== pivot ? 'local' : 'world');
   document.querySelectorAll('[data-mode]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === mode)));
 }
@@ -2209,7 +2681,26 @@ el.canvas.addEventListener('pointerdown', (e) => {
   closeMenu();
   if (e.button === 1) e.preventDefault(); // no middle-click autoscroll
   const onGizmo = transform.axis !== null && transform.axis !== undefined;
-  downInfo = { x: e.clientX, y: e.clientY, button: e.button, onGizmo, box: false, ground: null };
+  downInfo = { x: e.clientX, y: e.clientY, button: e.button, onGizmo, box: false, ground: null, floor: null };
+  if (view.floorMode) {
+    if (e.button !== 0 || onGizmo) return;
+    const rect = el.canvas.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+    raycaster.setFromCamera(ndc, camera);
+    const hit = raycaster.intersectObjects([...frt.values()].map((r) => r.mesh), false)[0];
+    if (!hit) return;
+    const id = hit.object.userData.floorId;
+    if (view.floorSel !== id) selectFloor(id);
+    const f = floorById(id);
+    const start = groundPoint(e.clientX, e.clientY, f.pos[1]);
+    if (start) downInfo.floor = { id, start, pos: f.pos.slice(), active: false };
+    try {
+      el.canvas.setPointerCapture(e.pointerId);
+    } catch (err) {
+      /* ignore */
+    }
+    return;
+  }
   if (e.button === 0 && !onGizmo) {
     // grabbing a shape drags it (and the rest of the selection) along the floor
     const leafId = pickAt(e.clientX, e.clientY);
@@ -2241,6 +2732,25 @@ el.canvas.addEventListener('pointerdown', (e) => {
 el.canvas.addEventListener('pointermove', (e) => {
   const d = downInfo;
   if (!d || d.button !== 0 || d.onGizmo) return;
+  if (d.floor) {
+    if (!d.floor.active && Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4) d.floor.active = true;
+    if (!d.floor.active) return;
+    const f = floorById(d.floor.id);
+    const p = f && groundPoint(e.clientX, e.clientY, d.floor.pos[1]);
+    if (!p) return;
+    let dx = p.x - d.floor.start.x;
+    let dz = p.z - d.floor.start.z;
+    if (view.snap) {
+      const g = state.floor.grid;
+      dx = Math.round(dx / g) * g;
+      dz = Math.round(dz / g) * g;
+    }
+    f.pos = [round(d.floor.pos[0] + dx), d.floor.pos[1], round(d.floor.pos[2] + dz)];
+    syncFloors();
+    updateFloorFields(f);
+    return;
+  }
+  if (view.floorMode) return;
   if (d.ground) {
     if (!d.ground.active && Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4) d.ground.active = true;
     if (!d.ground.active) return;
@@ -2255,7 +2765,7 @@ el.canvas.addEventListener('pointermove', (e) => {
     }
     for (const { o, pos } of d.ground.leaves) {
       o.pos = [round(pos[0] + dx), pos[1], round(pos[2] + dz)];
-      syncRT(o);
+      syncNode(o);
     }
     if (transform.object === pivot) recenterPivot();
     requestSolve();
@@ -2321,7 +2831,7 @@ function pickAt(clientX, clientY) {
   const rect = el.canvas.getBoundingClientRect();
   const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
   raycaster.setFromCamera(ndc, camera);
-  const proxies = state.nodes.filter((o) => o.kind === 'part' && o.visible && rt.has(o.id)).map((o) => rt.get(o.id).proxy);
+  const proxies = state.nodes.filter((o) => o.kind !== 'group' && o.visible).map(proxyOf).filter(Boolean);
   const hit = raycaster.intersectObjects(proxies, false)[0];
   lastPickPoint = hit ? hit.point.clone() : null;
   return hit ? hit.object.userData.id : null;
@@ -2344,6 +2854,13 @@ el.canvas.addEventListener('pointerup', (e) => {
   const info = downInfo;
   downInfo = null;
   const moved = Math.hypot(e.clientX - info.x, e.clientY - info.y);
+  if (view.floorMode) {
+    if (info.floor && info.floor.active) {
+      commit();
+      renderInspector();
+    } else if (!info.floor && moved <= 4 && info.button === 0 && !info.onGizmo && view.floorSel != null) selectFloor(null);
+    return;
+  }
   if (info.ground && info.ground.active) {
     try {
       el.canvas.releasePointerCapture(e.pointerId);
@@ -2411,6 +2928,8 @@ function menuItems() {
       { label: 'Add Orb', act: 'add:orb' },
       { label: 'Add Pill', act: 'add:pill' },
       { sep: true },
+      { label: 'Add point light', act: 'light:point' },
+      { label: 'Add spot light', act: 'light:spot' },
       { label: 'Import SVG…', act: 'svg' },
       { label: 'Select all', act: 'all', disabled: !state.nodes.length },
     ];
@@ -2506,6 +3025,23 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (mod || e.altKey) return;
+  if (k === 'b') {
+    setFloorMode(!view.floorMode);
+    return;
+  }
+  if (view.floorMode) {
+    if (k === '1') setMode('translate');
+    else if (k === '2') setMode('rotate');
+    else if (k === '3') setMode('scale');
+    else if (k === 'escape') {
+      if (view.floorSel != null) selectFloor(null);
+      else setFloorMode(false);
+    } else if ((k === 'delete' || k === 'backspace') && view.floorSel != null) {
+      e.preventDefault();
+      deleteFloor(view.floorSel);
+    } else if (k === 'c' && floorById(view.floorSel)) addFloor(floorById(view.floorSel));
+    return;
+  }
   if (k === '1') setMode('translate');
   else if (k === '2') setMode('rotate');
   else if (k === '3') setMode('scale');
@@ -2636,16 +3172,32 @@ el.fileSvg.addEventListener('change', async () => {
   if (file) await importSvgFile(file);
 });
 
-/** Everything that exports: every visible solid top-level unit, in world space. */
-async function exportGroup() {
+/**
+ * Everything that exports: every visible solid top-level unit, the lights and the floor,
+ * in world space, plus a manifest (the room JSON) that names each node the same way the
+ * GLB does, so whoever assembles rooms in Godot can map them without guessing.
+ */
+async function exportRoom() {
   if (dirty) solve();
   await settleRounds();
   if (dirty) solve();
   const grp = new THREE.Group();
   const strip = el.strip.checked;
+  const col = !!(el.col && el.col.checked);
   const plain = () => new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6 });
+  const used = new Set();
+  const uniqueName = (base) => {
+    let name = base || 'part';
+    for (let i = 2; used.has(name); i++) name = `${base}-${i}`;
+    used.add(name);
+    return name;
+  };
+  const r3 = (v) => [round(v.x), round(v.y), round(v.z)];
+  const entries = [];
+  const lights = [];
+
   for (const n of state.nodes) {
-    if (n.parent != null || n.neg || !n.visible) continue;
+    if (n.parent != null || n.neg || !n.visible || n.kind === 'light') continue;
     const u = units.get(n.id);
     let mesh = null;
     if (u && u.mesh) {
@@ -2666,44 +3218,139 @@ async function exportGroup() {
         mesh.scale.copy(r.proxy.scale);
       }
     }
-    if (mesh) {
-      mesh.name = slug(n.name) + (el.col && el.col.checked ? '-col' : '');
-      grp.add(mesh);
-    }
+    if (!mesh) continue;
+    const tags = n.tags || [];
+    const collide = col && !tags.includes('no-collide');
+    const base = uniqueName(slug(n.name));
+    mesh.name = base + (collide ? '-col' : '');
+    mesh.userData = { meshtype: { id: n.id, kind: isGroup(n) ? 'union' : 'part', tags } };
+    grp.add(mesh);
+    mesh.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(mesh);
+    const leaves = leavesOf(n.id);
+    entries.push({
+      node: mesh.name,
+      godotName: base,
+      kind: isGroup(n) ? 'union' : 'part',
+      id: n.id,
+      name: n.name,
+      tags,
+      collision: collide,
+      position: r3(mesh.position),
+      rotationDeg: isGroup(n) ? [0, 0, 0] : n.rot.slice(),
+      scale: r3(mesh.scale),
+      bounds: { min: r3(box.min), max: r3(box.max), center: r3(box.getCenter(new THREE.Vector3())), size: r3(box.getSize(new THREE.Vector3())) },
+      material: leaves.length ? { preset: leaves[0].mat, color: leaves[0].color } : null,
+      rounded: !!n.round,
+    });
   }
+
+  for (const n of state.nodes) {
+    if (n.kind !== 'light' || !n.visible) continue;
+    const L =
+      n.lightType === 'spot'
+        ? new THREE.SpotLight(n.color, n.intensity, n.range, deg2rad(n.angle), n.penumbra, 2)
+        : new THREE.PointLight(n.color, n.intensity, n.range, 2);
+    if (n.lightType === 'spot') {
+      const t = new THREE.Object3D();
+      t.position.set(0, 0, -1);
+      L.add(t);
+      L.target = t;
+    }
+    L.position.fromArray(n.pos);
+    L.rotation.set(deg2rad(n.rot[0]), deg2rad(n.rot[1]), deg2rad(n.rot[2]), 'XYZ');
+    L.name = uniqueName(slug(n.name));
+    if (L.target && L.target.parent === L) L.target.name = `${L.name}-aim`;
+    L.userData = { meshtype: { id: n.id, kind: 'light', tags: n.tags || [], shadows: n.shadows } };
+    grp.add(L);
+    const dir = new THREE.Vector3(0, 0, -1).applyEuler(L.rotation);
+    lights.push({
+      node: L.name,
+      godotName: L.name,
+      type: n.lightType,
+      godotType: n.lightType === 'spot' ? 'SpotLight3D' : 'OmniLight3D',
+      id: n.id,
+      name: n.name,
+      tags: n.tags || [],
+      color: n.color,
+      intensityCandela: n.intensity,
+      range: n.range,
+      spotAngleDeg: n.lightType === 'spot' ? n.angle : null,
+      penumbra: n.lightType === 'spot' ? n.penumbra : null,
+      castShadows: n.shadows,
+      position: n.pos.slice(),
+      rotationDeg: n.rot.slice(),
+      direction: n.lightType === 'spot' ? r3(dir) : null,
+    });
+  }
+
   const f = state.floor;
-  if (f.on) {
-    const g = new THREE.BoxGeometry(f.w, 0.06, f.d);
-    g.translate(0, -0.03, 0);
-    // UVs in meters so the texture tiles the same as in the editor
-    g.setAttribute('uv', new THREE.BufferAttribute(boxUVs(g.attributes.position.array, g.attributes.normal.array), 2));
-    let m;
-    if (strip) m = plain();
-    else {
-      m = floorMaterial(f.preset).clone();
-      m.map = m.map.clone();
-      const tile = FLOORS[f.preset].tile;
-      m.map.repeat.set(1 / tile, 1 / tile);
-      m.map.needsUpdate = true;
-      if (m.emissiveMap) m.emissiveMap = m.map;
+  const floorEntries = [];
+  if (f.show) {
+    for (const fl of state.floors) {
+      const g = new THREE.BoxGeometry(fl.w, 0.06, fl.d);
+      g.translate(0, -0.03, 0);
+      // UVs in meters so the texture tiles the same as in the editor
+      g.setAttribute('uv', new THREE.BufferAttribute(boxUVs(g.attributes.position.array, g.attributes.normal.array), 2));
+      let m;
+      if (strip) m = plain();
+      else {
+        m = floorMaterial(fl.preset).clone();
+        m.map = m.map.clone();
+        const tile = FLOORS[fl.preset].tile;
+        m.map.repeat.set(1 / tile, 1 / tile);
+        m.map.needsUpdate = true;
+        if (m.emissiveMap) m.emissiveMap = m.map;
+      }
+      const mesh = new THREE.Mesh(g, m);
+      mesh.position.fromArray(fl.pos);
+      mesh.rotation.set(0, deg2rad(fl.rotY), 0);
+      const base = uniqueName(slug(fl.name) || 'floor');
+      mesh.name = base + (col ? '-col' : '');
+      mesh.userData = { meshtype: { kind: 'floor', tags: ['floor'] } };
+      grp.add(mesh);
+      floorEntries.push({ node: mesh.name, godotName: base, size: [fl.w, fl.d], position: fl.pos.slice(), topY: fl.pos[1], rotationYDeg: fl.rotY, preset: fl.preset });
     }
-    const floor = new THREE.Mesh(g, m);
-    floor.name = 'floor' + (el.col && el.col.checked ? '-col' : '');
-    grp.add(floor);
   }
-  // room info for whoever assembles rooms in Godot (shows up as glTF extras)
-  grp.userData = { meshtype: { version: VERSION, grid: f.grid, floor: f.on ? { w: f.w, d: f.d, preset: f.preset } : null } };
-  return grp.children.length ? grp : null;
+  if (!grp.children.length) return null;
+  const name = slug(state.name);
+  grp.name = name;
+  grp.userData = { meshtype: { version: VERSION, grid: f.grid, floors: floorEntries.length } };
+  const manifest = {
+    format: 'meshtype-room',
+    formatVersion: 1,
+    generator: `Meshtype ${VERSION}`,
+    room: name,
+    glb: `${name}.glb`,
+    units: 'meters',
+    upAxis: '+Y',
+    lightForward: '-Z',
+    grid: f.grid,
+    floors: floorEntries,
+    collisionSuffix: col ? '-col' : null,
+    nodes: entries,
+    lights,
+    notes: [
+      'Every mesh and light in the GLB is a direct child of the root node, named as in "node".',
+      'With collisionSuffix set, Godot strips "-col" from the name on import and adds a StaticBody3D with trimesh collision; the node is then called "godotName".',
+      'Tags are also stored on each node as glTF extras (meshtype.tags).',
+      'Lights are in the GLB as KHR_lights_punctual (point/spot, intensity in candela).',
+    ],
+  };
+  return { grp, manifest };
 }
 
 $('#btn-glb').addEventListener('click', async () => {
-  const grp = await exportGroup();
-  if (!grp) return toast('Nothing to export yet. Cutters alone export nothing.');
-  grp.name = slug(state.name);
+  const out = await exportRoom();
+  if (!out) return toast('Nothing to export yet. Cutters alone export nothing.');
+  const name = slug(state.name);
   try {
-    const buf = await new GLTFExporter().parseAsync(grp, { binary: true });
-    download(`${slug(state.name)}.glb`, new Blob([buf], { type: 'model/gltf-binary' }));
-    toast(`Exported ${slug(state.name)}.glb`);
+    const buf = await new GLTFExporter().parseAsync(out.grp, { binary: true });
+    download(`${name}.glb`, new Blob([buf], { type: 'model/gltf-binary' }));
+    if (!el.json || el.json.checked) {
+      setTimeout(() => download(`${name}.room.json`, JSON.stringify(out.manifest, null, 2), 'application/json'), 400);
+      toast(`Exported ${name}.glb + ${name}.room.json`);
+    } else toast(`Exported ${name}.glb`);
   } catch (err) {
     console.error(err);
     toast('GLB export failed: ' + err.message);
@@ -2711,12 +3358,12 @@ $('#btn-glb').addEventListener('click', async () => {
 });
 
 $('#btn-obj').addEventListener('click', async () => {
-  const grp = await exportGroup();
-  if (!grp) return toast('Nothing to export yet. Cutters alone export nothing.');
-  grp.name = slug(state.name);
+  const out = await exportRoom();
+  if (!out) return toast('Nothing to export yet. Cutters alone export nothing.');
+  const name = slug(state.name);
   try {
-    download(`${slug(state.name)}.obj`, new OBJExporter().parse(grp), 'text/plain');
-    toast(`Exported ${slug(state.name)}.obj`);
+    download(`${name}.obj`, new OBJExporter().parse(out.grp), 'text/plain');
+    toast(`Exported ${name}.obj (OBJ has no lights)`);
   } catch (err) {
     console.error(err);
     toast('OBJ export failed: ' + err.message);
@@ -2792,17 +3439,15 @@ $('#cap-close').addEventListener('click', () => {
   setTimeout(() => toast('Browsers only let you close this tab yourself. (In the installed app it closes.)'), 150);
 });
 
-/* floor panel */
+/* floors: panel, Floor mode, inspector */
 
 const floorPanel = $('#floor-panel');
 const floorBtn = $('#btn-floor');
 function renderFloorPanel() {
-  const f = state.floor;
-  $('#floor-on').checked = f.on;
-  $('#floor-w').value = f.w;
-  $('#floor-d').value = f.d;
-  $('#floor-preset').value = f.preset;
-  floorBtn.setAttribute('aria-pressed', String(f.on));
+  $('#floor-show').checked = state.floor.show;
+  $('#btn-floormode').setAttribute('aria-pressed', String(view.floorMode));
+  $('#btn-floormode').textContent = view.floorMode ? 'Done editing floors (B)' : 'Edit floors (B)';
+  floorBtn.setAttribute('aria-pressed', String(view.floorMode));
 }
 function toggleFloorPanel(open) {
   const show = open ?? floorPanel.hidden;
@@ -2813,23 +3458,178 @@ floorBtn.addEventListener('click', () => toggleFloorPanel());
 window.addEventListener('pointerdown', (e) => {
   if (!floorPanel.hidden && !floorPanel.contains(e.target) && e.target !== floorBtn) toggleFloorPanel(false);
 });
-$('#floor-preset').innerHTML = Object.entries(FLOORS).map(([k, v]) => `<option value="${k}">${v.label}</option>`).join('');
-floorPanel.addEventListener('change', (e) => {
-  const f = state.floor;
-  const t = e.target;
-  if (t.id === 'floor-on') f.on = t.checked;
-  else if (t.id === 'floor-w') f.w = clamp(parseFloat(t.value) || f.w, 1, 200);
-  else if (t.id === 'floor-d') f.d = clamp(parseFloat(t.value) || f.d, 1, 200);
-  else if (t.id === 'floor-preset') f.preset = t.value;
-  else return;
-  syncFloor();
-  renderFloorPanel();
+$('#floor-show').addEventListener('change', (e) => {
+  state.floor.show = e.target.checked;
+  syncFloors();
   commit();
 });
+$('#btn-floormode').addEventListener('click', () => setFloorMode(!view.floorMode));
+$('#btn-addfloor').addEventListener('click', () => addFloor());
 $('#grid-size').addEventListener('change', (e) => {
   state.floor.grid = Number(e.target.value);
-  syncFloor();
+  syncFloors();
   commit();
+});
+
+function setFloorMode(on) {
+  view.floorMode = on;
+  document.body.classList.toggle('floor-mode', on);
+  if (!on) view.floorSel = null;
+  if (on) {
+    closeMenu();
+    attachFloorGizmo();
+  } else attachGizmo();
+  syncCages();
+  syncFloors();
+  renderFloorPanel();
+  renderInspector();
+  const hint = $('#hint');
+  if (hint) {
+    hint.textContent = on
+      ? 'FLOOR MODE · parts are locked · click a floor to pick it · drag to slide · 1/2/3 move/rotate/scale · B to finish'
+      : 'WASD fly · Q down · E up · Shift fine · Ctrl fast · right-click for the menu';
+  }
+}
+
+function attachFloorGizmo() {
+  transform.showX = transform.showY = transform.showZ = true;
+  const r = view.floorSel != null && frt.get(view.floorSel);
+  if (!r) {
+    transform.detach();
+    return;
+  }
+  transform.attach(r.mesh);
+  transform.setSpace('local');
+  if (view.mode === 'rotate') {
+    transform.showX = false;
+    transform.showZ = false;
+  } else if (view.mode === 'scale') transform.showY = false;
+}
+
+function selectFloor(id) {
+  view.floorSel = id;
+  attachFloorGizmo();
+  syncFloors();
+  renderInspector();
+}
+
+function addFloor(src) {
+  const base = src || { w: 10, d: 10, preset: 'tile', rotY: 0, pos: [0, 0, 0] };
+  const f = sanitizeFloorItem({ ...base, id: state.nextId++, name: src ? `${src.name} copy` : `Floor ${state.floors.length + 1}` });
+  if (state.floors.length) {
+    // park it against the east edge of everything so it does not clip into another room
+    let maxX = -Infinity;
+    for (const o of state.floors) for (const [x] of floorCorners(o)) maxX = Math.max(maxX, x);
+    f.pos = [round(maxX + f.w / 2), src ? src.pos[1] : 0, src ? src.pos[2] : 0];
+  }
+  state.floors.push(f);
+  state.floor.show = true;
+  if (!view.floorMode) setFloorMode(true);
+  selectFloor(f.id);
+  commit();
+  renderFloorPanel();
+}
+
+function deleteFloor(id) {
+  state.floors = state.floors.filter((f) => f.id !== id);
+  if (view.floorSel === id) view.floorSel = null;
+  attachFloorGizmo();
+  syncFloors();
+  renderInspector();
+  commit();
+}
+
+/** Called while the gizmo moves a floor. */
+function floorFromGizmo(mesh) {
+  const f = floorById(mesh.userData.floorId);
+  if (!f) return;
+  const g = state.floor.grid;
+  let w = Math.max(0.5, mesh.scale.x);
+  let d = Math.max(0.5, mesh.scale.z);
+  if (view.snap && view.mode === 'scale') {
+    w = Math.max(g, Math.round(w / g) * g);
+    d = Math.max(g, Math.round(d / g) * g);
+  }
+  f.w = round(w);
+  f.d = round(d);
+  mesh.scale.set(f.w, 1, f.d);
+  applyDirectionalScale(); // re-pin the far edge after snapping the size
+  f.pos = [round(mesh.position.x), round(mesh.position.y), round(mesh.position.z)];
+  f.rotY = round(rad2deg(mesh.rotation.y), 2);
+  syncFloors();
+  updateFloorFields(f);
+}
+
+function floorInspectorHTML() {
+  const list = state.floors
+    .map((f) => `<li class="row ${f.id === view.floorSel ? 'sel' : ''}" data-floor="${f.id}"><span class="nm">${esc(f.name)}</span><span class="sub">${f.w}×${f.d} m</span></li>`)
+    .join('');
+  const head = `<h2>Floor mode</h2>
+<p class="hint">Parts are locked while you edit floors. Click a floor to pick it, drag to slide it, or use the gizmo. Floors that overlap turn red.</p>
+<div class="acts"><button type="button" data-fact="add">Add floor</button><button type="button" data-fact="done">Done (B)</button></div>
+<h2>Floors</h2><ul class="list floorlist">${list || '<li class="sub">No floors yet.</li>'}</ul>`;
+  const f = floorById(view.floorSel);
+  if (!f) return head;
+  const bad = overlappingFloors().has(f.id);
+  const opts = Object.entries(FLOORS).map(([k, v]) => `<option value="${k}" ${k === f.preset ? 'selected' : ''}>${v.label}</option>`).join('');
+  const num = (key, val, step, label) => `<input type="number" step="${step}" data-fl="${key}" value="${val}" aria-label="${label}">`;
+  return `${head}
+<h2>${esc(f.name)}</h2>
+${bad ? '<p class="warn">This floor overlaps another one.</p>' : ''}
+<div class="field"><input type="text" data-fl="name" maxlength="60" value="${esc(f.name)}" aria-label="Floor name" spellcheck="false"></div>
+<div class="field"><span class="lbl">Flooring</span><select data-fl="preset" aria-label="Flooring">${opts}</select></div>
+<div class="xrow"><span>Size</span>${num('w', f.w, state.floor.grid, 'Width')}${num('d', f.d, state.floor.grid, 'Depth')}<span class="sub">m</span></div>
+<div class="xrow"><span>Move</span>${num('x', f.pos[0], state.floor.grid, 'X')}${num('y', f.pos[1], 0.05, 'Height')}${num('z', f.pos[2], state.floor.grid, 'Z')}</div>
+<div class="xrow"><span>Turn°</span>${num('rotY', f.rotY, 15, 'Rotation')}</div>
+<div class="acts"><button type="button" data-fact="dup">Duplicate</button><button type="button" data-fact="del" class="danger">Delete floor</button></div>`;
+}
+
+function updateFloorFields(f) {
+  const map = { w: f.w, d: f.d, x: f.pos[0], y: f.pos[1], z: f.pos[2], rotY: f.rotY };
+  for (const input of el.inspector.querySelectorAll('input[data-fl]')) {
+    if (document.activeElement === input || !(input.dataset.fl in map)) continue;
+    input.value = String(map[input.dataset.fl]);
+  }
+  const row = el.inspector.querySelector(`[data-floor="${f.id}"] .sub`);
+  if (row) row.textContent = `${f.w}×${f.d} m`;
+}
+
+el.inspector.addEventListener('change', (e) => {
+  const t = e.target;
+  if (!t.dataset || !t.dataset.fl) return;
+  const f = floorById(view.floorSel);
+  if (!f) return;
+  const k = t.dataset.fl;
+  if (k === 'name') f.name = t.value.slice(0, 60) || 'Floor';
+  else if (k === 'preset') f.preset = FLOORS[t.value] ? t.value : f.preset;
+  else {
+    const v = parseFloat(t.value);
+    if (!Number.isFinite(v)) return;
+    if (k === 'w') f.w = clamp(v, 0.5, 200);
+    else if (k === 'd') f.d = clamp(v, 0.5, 200);
+    else if (k === 'x') f.pos[0] = v;
+    else if (k === 'y') f.pos[1] = v;
+    else if (k === 'z') f.pos[2] = v;
+    else if (k === 'rotY') f.rotY = v;
+  }
+  syncFloors();
+  attachFloorGizmo();
+  commit();
+  renderInspector();
+});
+el.inspector.addEventListener('click', (e) => {
+  const row = e.target.closest('[data-floor]');
+  if (row) {
+    selectFloor(Number(row.dataset.floor));
+    return;
+  }
+  const b = e.target.closest('[data-fact]');
+  if (!b) return;
+  const a = b.dataset.fact;
+  if (a === 'add') addFloor();
+  else if (a === 'done') setFloorMode(false);
+  else if (a === 'dup' && floorById(view.floorSel)) addFloor(floorById(view.floorSel));
+  else if (a === 'del' && view.floorSel != null) deleteFloor(view.floorSel);
 });
 
 /* view cube: shows the camera orientation, click a face for that view, drag to orbit */
@@ -2948,3 +3748,6 @@ function boot() {
 }
 
 boot();
+
+// test hook (only with ?test in the URL)
+if (/[?&]test\b/.test(location.search)) window.__mt = { transform, pivot, rt, lrt, getState: () => state };

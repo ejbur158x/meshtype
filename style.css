@@ -462,3 +462,23 @@ select.mini { width: auto; min-height: 20px; padding: 0 2px; }
 .floorpanel { left: auto; right: auto; margin-left: 330px; }
 .floorpanel .chk { margin-bottom: 6px; }
 #btn-floor[aria-pressed="true"] { color: #0b4a86; font-weight: 600; }
+
+/* ---------- tags, lights ---------- */
+.tags { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
+.tag {
+  display: inline-flex; align-items: center; gap: 2px; padding: 0 2px 0 7px; border-radius: 10px;
+  border: 1px solid #8fb3d9; background: linear-gradient(#f4f9ff, #dcebfb); color: #12395f; font-size: 11px;
+}
+.tag button { min-height: 0; height: 16px; width: 16px; padding: 0; border: 0; background: none; box-shadow: none; color: #5a6a80; line-height: 1; }
+.tag button:hover:not(:disabled) { color: #a8182c; background: none; border: 0; box-shadow: none; }
+.tagadd input { flex: 1; }
+.tagadd button { margin-left: 0; }
+.chip.lit { color: #7a5a00; border-color: #e2c66a; background: #fff8dc; }
+.bico { width: 14px; height: 14px; vertical-align: -3px; margin-right: 3px; }
+
+/* ---------- floor mode ---------- */
+body.floor-mode .status { background: linear-gradient(#fff6d5, #f3e3a6); color: #5a4300; }
+body.floor-mode #btn-floor { color: #7a5a00; }
+.warn { margin: 0 0 8px; padding: 4px 8px; border: 1px solid #e0364a; border-radius: 3px; background: #fff0f2; color: #8f1020; }
+.floorlist .row { cursor: pointer; }
+.floorlist .sub { margin-left: auto; }

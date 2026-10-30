@@ -9,7 +9,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<link rel="stylesheet" href="style.css?v=0.3.0">
+<link rel="stylesheet" href="style.css?v=0.4.0">
 <script type="importmap">
 {
   "imports": {
@@ -48,6 +48,11 @@
     </symbol>
     <symbol id="i-solid" viewBox="0 0 24 24"><use href="#cube" width="24" height="24" style="--ct:#c9ecff;--cl:#5db9ee;--cr:#2c86c9"/></symbol>
     <symbol id="i-cutter" viewBox="0 0 24 24"><use href="#cube" width="24" height="24" style="--ct:#ffc9cf;--cl:#f0596c;--cr:#c4263c"/></symbol>
+    <symbol id="i-light" viewBox="0 0 24 24">
+      <circle cx="12" cy="10" r="7" fill="#fff3b0" stroke="#b08a10" stroke-width="1.3"/>
+      <circle cx="10" cy="8" r="2.4" fill="#fff" opacity=".9"/>
+      <rect x="8.5" y="16.5" width="7" height="5" rx="1.2" fill="#c9d2dc" stroke="#6b7682" stroke-width="1"/>
+    </symbol>
     <symbol id="i-group" viewBox="0 0 24 24">
       <use href="#cube" x="0" y="4" width="16" height="16" style="--ct:#c9ecff;--cl:#5db9ee;--cr:#2c86c9"/>
       <use href="#cube" x="8" y="2" width="16" height="16" style="--ct:#c9ecff;--cl:#5db9ee;--cr:#2c86c9"/>
@@ -63,7 +68,7 @@
   <header class="titlebar">
     <span class="logo" aria-hidden="true"></span>
     <span class="word">Meshtype</span>
-    <span class="ver">v0.3.0</span>
+    <span class="ver">v0.4.0</span>
     <input id="project-name" class="proj" type="text" value="untitled" maxlength="60" aria-label="Project name" spellcheck="false">
     <span class="spacer"></span>
     <button id="btn-install" type="button" hidden title="Install Meshtype as an app">Install app</button>
@@ -85,7 +90,8 @@
       <button id="btn-save" type="button" title="Save project as .meshtype.json">Save</button>
     </div>
     <span class="spacer"></span>
-    <label class="chk" title="Name meshes with -col so Godot builds collision for them on import"><input id="chk-col" type="checkbox" checked> Godot collision</label>
+    <label class="chk" title="Name meshes with -col so Godot builds collision for them on import (tag a part no-collide to skip it)"><input id="chk-col" type="checkbox" checked> Godot collision</label>
+    <label class="chk" title="Also download name.room.json describing every part, light and tag"><input id="chk-json" type="checkbox" checked> Room JSON</label>
     <label class="chk" title="Export plain white geometry and skip the Aero materials"><input id="chk-strip" type="checkbox"> Geometry only</label>
     <div class="grp">
       <button id="btn-obj" type="button">Export OBJ</button>
@@ -108,6 +114,8 @@
         <button type="button" data-add="orb">Orb</button>
         <button type="button" data-add="pill">Pill</button>
         <button id="btn-svg" type="button" title="Import an SVG file and extrude it">SVG</button>
+        <button type="button" data-add-light="point" title="Point light (bulb)"><svg class="bico" aria-hidden="true"><use href="#i-light"/></svg>Light</button>
+        <button type="button" data-add-light="spot" title="Spot light (cone)"><svg class="bico" aria-hidden="true"><use href="#i-light"/></svg>Spot</button>
       </div>
 
       <h2>Combine</h2>
@@ -170,11 +178,10 @@
           <div class="inline"><button type="button" id="btn-sky-upload">Upload…</button><label class="chk"><input id="sky-reflect" type="checkbox" checked> Reflect it</label></div></div>
       </div>
       <div id="floor-panel" class="skypanel floorpanel" hidden>
-        <label class="chk"><input id="floor-on" type="checkbox"> Show baseplate</label>
-        <div class="field"><span class="lbl">Size (meters)</span>
-          <div class="two"><input id="floor-w" type="number" min="1" max="200" step="1" aria-label="Floor width"><input id="floor-d" type="number" min="1" max="200" step="1" aria-label="Floor depth"></div></div>
-        <div class="field"><span class="lbl">Flooring</span><select id="floor-preset" aria-label="Flooring"></select></div>
-        <p class="tip">The floor's top sits at height 0 and exports with the room.</p>
+        <label class="chk"><input id="floor-show" type="checkbox" checked> Show floors</label>
+        <div class="field"><button type="button" id="btn-floormode" class="wide" aria-pressed="false">Edit floors (B)</button></div>
+        <div class="field"><button type="button" id="btn-addfloor" class="wide">Add floor</button></div>
+        <p class="tip">Floors are their own layer. Normal clicks and box select never grab them; edit them in Floor mode. Overlapping floors turn red.</p>
       </div>
       <div id="marquee" class="marquee" hidden></div>
       <div id="vcube" class="vcube" aria-label="View selector. Click a face or drag to orbit.">
@@ -203,7 +210,12 @@
 </div>
 
 <div id="ctx" class="ctx" role="menu" hidden></div>
+<datalist id="tag-presets">
+  <option value="room"><option value="hall"><option value="door"><option value="archway"><option value="keycard"><option value="locked">
+  <option value="window"><option value="vent"><option value="stairs"><option value="elevator"><option value="spawn"><option value="exit">
+  <option value="trigger"><option value="alarm"><option value="camera"><option value="switch"><option value="prop"><option value="no-collide">
+</datalist>
 
-<script type="module" src="src/main.js?v=0.3.0"></script>
+<script type="module" src="src/main.js?v=0.4.0"></script>
 </body>
 </html>
