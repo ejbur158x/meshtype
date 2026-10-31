@@ -1,4 +1,4 @@
-// Meshtype v0.7.0
+// Meshtype v0.7.1
 // A small browser mesh editor: squircle primitives, union / negate / split,
 // edge rounding, SVG extrusion, GLB export.
 
@@ -14,7 +14,7 @@ import { inspectSvg, makeSvgGeometry } from './svg.js';
 import { roundMesh, boxUVs } from './rounder.js';
 import { FLOORS, floorMaterial } from './floor.js';
 
-const VERSION = '0.7.0';
+const VERSION = '0.7.1';
 const STORE_KEY = 'meshtype.autosave';
 
 const PRESETS = {
@@ -169,7 +169,7 @@ const view = {
   mode: 'translate',
   sunMode: false,
   iso: false,
-  pivot: 'selection',
+  pivot: 'orbit',
   space: 'world',
   surfaceDrag: true,
   scaleFrom: 'edge',
@@ -2625,7 +2625,7 @@ document.querySelectorAll('[data-add]').forEach((b) => b.addEventListener('click
 document.querySelectorAll('.grprow [data-act]').forEach((b) => b.addEventListener('click', () => runAction(b.dataset.act)));
 $('#btn-sun').addEventListener('click', () => setSunMode(!view.sunMode));
 $('#btn-iso').addEventListener('click', () => setIso(!view.iso));
-$('#btn-pivot').addEventListener('click', () => setPivot(view.pivot === 'world' ? 'selection' : 'world'));
+$('#btn-pivot').addEventListener('click', () => setPivot(view.pivot === 'eye' ? 'orbit' : 'eye'));
 document.querySelectorAll('[data-add-light]').forEach((b) => b.addEventListener('click', () => addLight(b.dataset.addLight)));
 el.union.addEventListener('click', () => doUnion('union'));
 el.intersect.addEventListener('click', () => doUnion('int'));
@@ -4071,35 +4071,52 @@ function setIso(on) {
     b.textContent = on ? 'ISO' : 'PERSP';
   }
 }
-/** Orbit pivot: around the selection (F re-centers on it) or locked to the world center. */
+/**
+ * Camera pivot. ORBIT: right-drag circles around a point in front of you (F moves that point
+ * onto the selection). EYE: the pivot is you, so right-drag turns your head in place like a
+ * first-person camera; WASD walks and the wheel moves forward/back.
+ */
+const EYE_GAP = 0.05;
+let orbitDist = 5;
 function setPivot(mode) {
-  view.pivot = mode;
-  if (mode === 'world') {
-    const dir = camera.position.clone().sub(orbit.target);
-    orbit.target.set(0, 0, 0);
-    camera.position.copy(orbit.target).add(dir);
+  const fwd = camera.getWorldDirection(new THREE.Vector3());
+  if (mode === 'eye' && view.pivot !== 'eye') {
+    orbitDist = Math.max(1, camera.position.distanceTo(orbit.target));
+    orbit.target.copy(camera.position).addScaledVector(fwd, EYE_GAP);
+    orbit.enableZoom = false;
+  } else if (mode === 'orbit' && view.pivot === 'eye') {
+    orbit.target.copy(camera.position).addScaledVector(fwd, orbitDist);
+    orbit.enableZoom = true;
   }
+  view.pivot = mode;
   const b = $('#btn-pivot');
   if (b) {
-    b.setAttribute('aria-pressed', String(mode === 'world'));
-    b.textContent = mode === 'world' ? 'WORLD' : 'SEL';
-    b.title = mode === 'world' ? 'Orbiting the world center (click: orbit the selection)' : 'Orbiting the selection; F re-centers (click: lock to world center)';
+    b.setAttribute('aria-pressed', String(mode === 'eye'));
+    b.textContent = mode === 'eye' ? 'POV' : 'ORBIT';
+    b.title = mode === 'eye' ? 'The camera turns around itself (first-person look). Click: orbit a point instead' : 'The camera orbits a point; F moves it onto the selection. Click: turn around yourself instead';
   }
 }
+/** Keep the eye-mode pivot glued just in front of the camera. */
+function eyeStep() {
+  if (view.pivot !== 'eye' || viewTween.on) return;
+  const fwd = camera.getWorldDirection(new THREE.Vector3());
+  orbit.target.copy(camera.position).addScaledVector(fwd, EYE_GAP);
+}
+el.canvas.addEventListener(
+  'wheel',
+  (e) => {
+    if (view.pivot !== 'eye') return;
+    e.preventDefault();
+    const fwd = camera.getWorldDirection(new THREE.Vector3());
+    const step = -Math.sign(e.deltaY) * (fly.shift ? 0.15 : fly.ctrl ? 2.5 : 0.6) * lensScale();
+    camera.position.addScaledVector(fwd, step);
+    orbit.target.addScaledVector(fwd, step);
+  },
+  { passive: false }
+);
 
 function frameSelected() {
   let lv = selLeaves().filter((o) => o.visible);
-  if (view.pivot === 'world') {
-    // keep the pivot at the world center; just back off until everything fits
-    const all = lv.length ? lv : state.nodes.filter((n) => n.kind === 'part' && n.visible && !n.neg);
-    const b = boxOf(all);
-    for (const f of state.floors) for (const [x, z] of floorCorners(f)) b.expandByPoint(new THREE.Vector3(x, f.pos[1], z));
-    if (b.isEmpty()) return;
-    const reach = Math.max(b.max.length(), b.min.length(), 1);
-    const dir = camera.position.clone().sub(orbit.target).normalize();
-    camera.position.copy(orbit.target).addScaledVector(dir, Math.max(2, reach * 2.2) * lensScale());
-    return;
-  }
   if (!lv.length) lv = state.nodes.filter((n) => n.kind === 'part' && n.visible && !n.neg);
   if (!lv.length) return;
   const box = boxOf(lv);
@@ -4877,6 +4894,7 @@ function loop() {
   if (dirty && now - lastSolve > 70) solve();
   if (planeDirty) updateAlignPlane();
   orbit.update();
+  eyeStep();
   renderer.render(scene, camera);
 }
 

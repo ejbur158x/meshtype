@@ -1,6 +1,6 @@
 # Meshtype
 
-**v0.7.0.** A tiny browser mesh editor for squircles and glossy Frutiger Aero shapes. Solid and cutter parts, UNION / NEGATE / SPLIT, edge rounding, SVG extrusion, multi-select, and GLB export. No build step. Installable as an app and works offline.
+**v0.7.1.** A tiny browser mesh editor for squircles and glossy Frutiger Aero shapes. Solid and cutter parts, UNION / NEGATE / SPLIT, edge rounding, SVG extrusion, multi-select, and GLB export. No build step. Installable as an app and works offline.
 
 Made because Blender is overkill when all you need is a rounded panel with a dent in it.
 
@@ -73,7 +73,7 @@ With **Room JSON** ticked, Export GLB also downloads `room-name.room.json`. It l
 - **Sun** (☀ in the toolbar, or `L`): a visible yellow sun with a dashed line to the world center. Drag it with the gizmo to light the scene from anywhere; set color, strength and sky light (reflections and fill). Tick *Export as a DirectionalLight3D* to put it in the GLB.
 - **View cube corners**: the small squares at each face's corners snap to the isometric view from that corner.
 - **PERSP / ISO** (under the cube): isometric view, with almost no perspective.
-- **SEL / WORLD** (under the cube): SEL orbits the selection (F re-centers on it); WORLD locks the orbit to the world center and F only backs off so everything fits.
+- **ORBIT / POV** (under the cube): ORBIT circles around a point in front of you (F moves that point onto the selection). POV makes the pivot *you*: right-drag turns your head in place, WASD still flies, and the wheel moves the camera forward and back (Shift slow, Ctrl fast).
 
 ## The combine model
 
@@ -234,7 +234,7 @@ The service worker caches the whole app. After you edit any file, regenerate the
 node tools/build-precache.mjs
 ```
 
-## Known limits (v0.7.0)
+## Known limits (v0.7.1)
 
 - Booleans are live, so keep Detail at 2 or 3 on dense scenes.
 - Scaling a rotated part from a multi-selection gizmo can introduce shear, which Meshtype can't store. Use Scale on single parts for that.

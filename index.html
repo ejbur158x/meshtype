@@ -9,7 +9,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<link rel="stylesheet" href="style.css?v=0.7.0">
+<link rel="stylesheet" href="style.css?v=0.7.1">
 <script type="importmap">
 {
   "imports": {
@@ -72,7 +72,7 @@
   <header class="titlebar">
     <span class="logo" aria-hidden="true"></span>
     <span class="word">Meshtype</span>
-    <span class="ver">v0.7.0</span>
+    <span class="ver">v0.7.1</span>
     <input id="project-name" class="proj" type="text" value="untitled" maxlength="60" aria-label="Project name" spellcheck="false">
     <span class="spacer"></span>
     <button id="btn-install" type="button" hidden title="Install Meshtype as an app">Install app</button>
@@ -206,7 +206,7 @@
       <div id="marquee" class="marquee" hidden></div>
       <div class="vc-btns">
         <button id="btn-iso" type="button" aria-pressed="false" title="Perspective / isometric (almost no perspective)">PERSP</button>
-        <button id="btn-pivot" type="button" aria-pressed="false" title="Orbiting the selection; F re-centers (click: lock to world center)">SEL</button>
+        <button id="btn-pivot" type="button" aria-pressed="false" title="The camera orbits a point; F moves it onto the selection. Click: turn around yourself instead">ORBIT</button>
       </div>
       <div id="vcube" class="vcube" aria-label="View selector. Click a face or drag to orbit.">
         <div class="vc-cube" id="vc-cube">
@@ -240,6 +240,6 @@
   <option value="trigger"><option value="alarm"><option value="camera"><option value="switch"><option value="prop"><option value="no-collide">
 </datalist>
 
-<script type="module" src="src/main.js?v=0.7.0"></script>
+<script type="module" src="src/main.js?v=0.7.1"></script>
 </body>
 </html>
