@@ -9,7 +9,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<link rel="stylesheet" href="style.css?v=0.6.2">
+<link rel="stylesheet" href="style.css?v=0.7.0">
 <script type="importmap">
 {
   "imports": {
@@ -53,6 +53,10 @@
       <circle cx="10" cy="8" r="2.4" fill="#fff" opacity=".9"/>
       <rect x="8.5" y="16.5" width="7" height="5" rx="1.2" fill="#c9d2dc" stroke="#6b7682" stroke-width="1"/>
     </symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24">
+      <path d="M2 6.5c0-1 .8-1.8 1.8-1.8h5.3l2 2.3h9.1c1 0 1.8.8 1.8 1.8v9.4c0 1-.8 1.8-1.8 1.8H3.8c-1 0-1.8-.8-1.8-1.8z" fill="#ffd96b" stroke="#a7801a" stroke-width="1"/>
+      <path d="M2 9.5h20" stroke="#fff3c4" stroke-width="1.2"/>
+    </symbol>
     <symbol id="i-group" viewBox="0 0 24 24">
       <use href="#cube" x="0" y="4" width="16" height="16" style="--ct:#c9ecff;--cl:#5db9ee;--cr:#2c86c9"/>
       <use href="#cube" x="8" y="2" width="16" height="16" style="--ct:#c9ecff;--cl:#5db9ee;--cr:#2c86c9"/>
@@ -68,7 +72,7 @@
   <header class="titlebar">
     <span class="logo" aria-hidden="true"></span>
     <span class="word">Meshtype</span>
-    <span class="ver">v0.6.2</span>
+    <span class="ver">v0.7.0</span>
     <input id="project-name" class="proj" type="text" value="untitled" maxlength="60" aria-label="Project name" spellcheck="false">
     <span class="spacer"></span>
     <button id="btn-install" type="button" hidden title="Install Meshtype as an app">Install app</button>
@@ -87,7 +91,7 @@
     <span class="vsep"></span>
     <div class="grp">
       <button id="btn-open" type="button" title="Open a .meshtype.json project">Open</button>
-      <button id="btn-save" type="button" title="Save project as .meshtype.json">Save</button>
+      <button id="btn-save" type="button" title="Save project as .meshtype.json (Ctrl+S, Ctrl+Shift+S = save as)">Save</button>
     </div>
     <span class="spacer"></span>
     <label class="chk" title="Name meshes with -col so Godot builds collision for them on import (tag a part no-collide to skip it)"><input id="chk-col" type="checkbox" checked> Godot collision</label>
@@ -95,7 +99,7 @@
     <label class="chk" title="Export plain white geometry and skip the Aero materials"><input id="chk-strip" type="checkbox"> Geometry only</label>
     <div class="grp">
       <button id="btn-obj" type="button">Export OBJ</button>
-      <button id="btn-glb" type="button" class="primary">Export GLB</button>
+      <button id="btn-glb" type="button" class="primary" title="Export GLB (Ctrl+Alt+Shift+W)">Export GLB</button>
     </div>
     <input id="file-open" type="file" accept=".json,application/json" hidden>
     <input id="file-svg" type="file" accept=".svg,image/svg+xml" hidden>
@@ -133,6 +137,10 @@
         </button>
       </div>
       <button id="btn-intersect" type="button" class="wide" title="Keep only where the selected parts overlap">Intersect (keep the overlap)</button>
+      <div class="two grprow">
+        <button type="button" data-act="group" title="Put the selection under one parent; parts stay separate meshes (Ctrl+G)">Group</button>
+        <button type="button" data-act="ungroup" title="Remove the selected group, keep its parts (Ctrl+U)">Ungroup</button>
+      </div>
       <p class="note">Ctrl or Shift + click to pick several. <b>Red</b> parts are cutters: they do nothing until you UNION them with a solid.</p>
 
       <h2>Parts</h2>
@@ -148,8 +156,8 @@
           <button type="button" data-mode="scale" title="Scale (3)" aria-pressed="false">Scale</button>
         </div>
         <div class="seg" role="group" aria-label="Axis space">
-          <button type="button" data-space="world" title="Move and rotate along the world axes (L)" aria-pressed="true">World</button>
-          <button type="button" data-space="local" title="Move and rotate along the object's own axes (L)" aria-pressed="false">Local</button>
+          <button type="button" data-space="world" title="Move and rotate along the world axes (O)" aria-pressed="true">World</button>
+          <button type="button" data-space="local" title="Move and rotate along the object's own axes (O)" aria-pressed="false">Local</button>
         </div>
         <div class="seg" id="scale-from" role="group" aria-label="Scale from" hidden>
           <button type="button" data-sfrom="edge" title="The opposite side stays planted (hold Alt to flip)" aria-pressed="true">From edge</button>
@@ -164,6 +172,7 @@
         <button id="btn-floor" type="button" aria-expanded="false" aria-controls="floor-panel" aria-pressed="false" title="Baseplate to build rooms on">Floor ▾</button>
         <label class="chk"><input id="chk-result" type="checkbox" checked> Result</label>
         <label class="chk"><input id="chk-cages" type="checkbox"> Cages</label>
+        <button id="btn-sun" type="button" aria-pressed="false" title="Edit the sun: drag it to light the scene (L)">☀ Sun</button>
         <button id="btn-sky" type="button" aria-expanded="false" aria-controls="sky-panel" title="Sky background">Sky ▾</button>
       </div>
       <div id="sky-panel" class="skypanel" hidden>
@@ -195,6 +204,10 @@
         <p class="tip">Floors are their own layer. Normal clicks and box select never grab them; edit them in Floor mode. Overlapping floors turn red.</p>
       </div>
       <div id="marquee" class="marquee" hidden></div>
+      <div class="vc-btns">
+        <button id="btn-iso" type="button" aria-pressed="false" title="Perspective / isometric (almost no perspective)">PERSP</button>
+        <button id="btn-pivot" type="button" aria-pressed="false" title="Orbiting the selection; F re-centers (click: lock to world center)">SEL</button>
+      </div>
       <div id="vcube" class="vcube" aria-label="View selector. Click a face or drag to orbit.">
         <div class="vc-cube" id="vc-cube">
           <div class="vc-face" data-view="front" style="--t:translateZ(var(--h))">Front</div>
@@ -227,6 +240,6 @@
   <option value="trigger"><option value="alarm"><option value="camera"><option value="switch"><option value="prop"><option value="no-collide">
 </datalist>
 
-<script type="module" src="src/main.js?v=0.6.2"></script>
+<script type="module" src="src/main.js?v=0.7.0"></script>
 </body>
 </html>

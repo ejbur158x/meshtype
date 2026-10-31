@@ -1,4 +1,4 @@
-// Meshtype v0.6.2
+// Meshtype v0.7.0
 // A small browser mesh editor: squircle primitives, union / negate / split,
 // edge rounding, SVG extrusion, GLB export.
 
@@ -14,7 +14,7 @@ import { inspectSvg, makeSvgGeometry } from './svg.js';
 import { roundMesh, boxUVs } from './rounder.js';
 import { FLOORS, floorMaterial } from './floor.js';
 
-const VERSION = '0.6.2';
+const VERSION = '0.7.0';
 const STORE_KEY = 'meshtype.autosave';
 
 const PRESETS = {
@@ -164,9 +164,12 @@ function sanitizeFloors(data, nextId) {
   return out;
 }
 
-let state = { name: 'untitled', nodes: [], assets: {}, sel: [], active: null, nextId: 1, floor: sanitizeFloor(), floors: [] };
+let state = { name: 'untitled', nodes: [], assets: {}, sel: [], active: null, nextId: 1, floor: sanitizeFloor(), floors: [], sun: null };
 const view = {
   mode: 'translate',
+  sunMode: false,
+  iso: false,
+  pivot: 'selection',
   space: 'world',
   surfaceDrag: true,
   scaleFrom: 'edge',
@@ -190,6 +193,19 @@ function leavesOf(id, out = []) {
   if (n.kind !== 'group') out.push(n); // parts and lights
   else for (const k of kidsOf(id)) leavesOf(k.id, out);
   return out;
+}
+const isFolder = (n) => !!n && n.kind === 'group' && n.mode === 'folder';
+/** A "root" is a separate exported object: top level, or only inside folders (Group). */
+function isRoot(n) {
+  if (!n) return false;
+  let p = n.parent;
+  for (let guard = 0; guard < 64; guard++) {
+    if (p == null) return true;
+    const pn = node(p);
+    if (!pn || !isFolder(pn)) return false;
+    p = pn.parent;
+  }
+  return false;
 }
 function topOf(id) {
   let n = node(id);
@@ -317,7 +333,7 @@ function sanitizeLight(raw) {
     rot: vec(raw.rot, [0, 0, 0]),
     scl: [1, 1, 1],
     neg: false,
-    parent: null,
+    parent: Number.isInteger(raw.parent) ? raw.parent : null,
     visible: raw.visible !== false,
   };
   const tg = sanitizeTags(raw.tags);
@@ -332,7 +348,7 @@ function sanitizeGroup(raw) {
     id: Number.isInteger(raw.id) && raw.id > 0 ? raw.id : 0,
     name: String(raw.name || 'Union').slice(0, 60),
     neg: raw.neg === true,
-    mode: raw.mode === 'int' ? 'int' : 'union',
+    mode: raw.mode === 'int' ? 'int' : raw.mode === 'folder' ? 'folder' : 'union',
     parent: Number.isInteger(raw.parent) ? raw.parent : null,
     visible: raw.visible !== false,
   };
@@ -383,7 +399,7 @@ function sanitizeProject(data) {
   for (const n of nodes) {
     if (n.parent != null) {
       const p = byIdMap.get(n.parent);
-      if (!p || p.kind !== 'group' || p === n || n.kind === 'light') n.parent = null;
+      if (!p || p.kind !== 'group' || p === n || (n.kind === 'light' && p.mode !== 'folder')) n.parent = null;
     }
   }
   for (const n of nodes) {
@@ -403,7 +419,10 @@ function sanitizeProject(data) {
   for (const n of nodes) if (n.parent == null) place(n);
   for (const n of nodes) place(n);
   // groups keep no round when they are children, and parts inside groups neither
-  for (const n of ordered) if (n.parent != null) delete n.round;
+  for (const n of ordered) {
+    const p = n.parent != null ? byIdMap.get(n.parent) : null;
+    if (p && p.mode !== 'folder') delete n.round;
+  }
   const assets = {};
   if (data.assets && typeof data.assets === 'object') {
     for (const [k, v] of Object.entries(data.assets)) if (typeof v === 'string') assets[k] = v;
@@ -497,6 +516,59 @@ camera.position.set(2.6, 1.7, 3.1);
 const sun = new THREE.DirectionalLight(0xffffff, 1.1);
 sun.position.set(3, 5, 2);
 scene.add(sun);
+scene.add(sun.target);
+
+/* The global sun: a visible, draggable handle (press L). It shines from the handle toward the world center. */
+const DEFAULT_SUN = { pos: [6, 10, 4], color: '#fff6e8', intensity: 1.1, ambient: 1, export: false, shadows: true };
+function sanitizeSun(raw) {
+  const s0 = raw && typeof raw === 'object' ? raw : {};
+  const pos = Array.isArray(s0.pos) && s0.pos.length === 3 && s0.pos.every(Number.isFinite) ? s0.pos.slice() : DEFAULT_SUN.pos.slice();
+  if (Math.hypot(...pos) < 0.5) pos[1] = 5;
+  return {
+    pos,
+    color: /^#[0-9a-f]{6}$/i.test(s0.color || '') ? s0.color : DEFAULT_SUN.color,
+    intensity: clamp(Number.isFinite(Number(s0.intensity)) ? Number(s0.intensity) : DEFAULT_SUN.intensity, 0, 10),
+    ambient: clamp(Number.isFinite(Number(s0.ambient)) ? Number(s0.ambient) : DEFAULT_SUN.ambient, 0, 3),
+    export: s0.export === true,
+    shadows: s0.shadows !== false,
+  };
+}
+const sunHandle = new THREE.Mesh(
+  new THREE.SphereGeometry(0.32, 20, 14),
+  new THREE.MeshBasicMaterial({ color: 0xffd23f, depthTest: false })
+);
+sunHandle.renderOrder = 30;
+{
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(0.42, 0.6, 24),
+    new THREE.MeshBasicMaterial({ color: 0xffe68a, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthTest: false })
+  );
+  ring.renderOrder = 30;
+  ring.userData.billboard = true;
+  sunHandle.add(ring);
+}
+scene.add(sunHandle);
+const sunLineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+const sunLine = new THREE.Line(sunLineGeo, new THREE.LineDashedMaterial({ color: 0xffc400, dashSize: 0.25, gapSize: 0.18, transparent: true, opacity: 0.8, depthTest: false }));
+sunLine.renderOrder = 29;
+scene.add(sunLine);
+
+function syncSun() {
+  const s0 = state.sun;
+  sunHandle.position.fromArray(s0.pos);
+  sun.position.fromArray(s0.pos);
+  sun.target.position.set(0, 0, 0);
+  sun.color.set(s0.color);
+  sun.intensity = s0.intensity;
+  sunHandle.material.color.set(s0.color).lerp(new THREE.Color(0xffd23f), 0.5);
+  scene.environmentIntensity = s0.ambient;
+  const a = sunLineGeo.attributes.position;
+  a.setXYZ(0, s0.pos[0], s0.pos[1], s0.pos[2]);
+  a.setXYZ(1, 0, 0, 0);
+  a.needsUpdate = true;
+  sunLine.computeLineDistances();
+  sunLine.material.opacity = view.sunMode ? 0.95 : 0.5;
+}
 
 let grid = null;
 let gridKey = '';
@@ -805,12 +877,20 @@ function syncRT(o) {
 /** Leaves whose own cages should show. A selected top-level union shows as one baked shape instead. */
 function directLeafSel() {
   const set = new Set();
-  for (const id of liveSel()) {
+  const walk = (id) => {
     const n = node(id);
     const u = units.get(id);
-    if (n && n.parent == null && u && u.mesh) continue;
-    for (const d of descendantIds(id)) set.add(d);
-  }
+    if (n && isRoot(n) && u && u.mesh) return; // shown as one baked shape
+    set.add(id);
+    for (const k of kidsOf(id)) walk(k.id);
+  };
+  for (const id of liveSel()) walk(id);
+  return set;
+}
+/** Units (baked shapes) that are selected directly or through a selected Group. */
+function selectedUnitIds() {
+  const set = new Set();
+  for (const id of liveSel()) for (const d of descendantIds(id)) if (units.has(d)) set.add(d);
   return set;
 }
 
@@ -826,7 +906,7 @@ function syncCages() {
     let cutter = false;
     let showWire = false;
     let showFill = false;
-    if (top && top.neg && top.kind === 'part') {
+    if ((top && top.neg && top.kind === 'part') || (o.neg && isRoot(o))) {
       // a loose cutter part
       cutter = true;
       showWire = true;
@@ -864,7 +944,7 @@ const edgeNeg = new THREE.LineBasicMaterial({ color: 0xe0364a, transparent: true
 
 /** Selection tint + crease outline on baked unions, and the red ghost of a negated union. */
 function decorateUnits() {
-  const sel = new Set(liveSel());
+  const sel = selectedUnitIds();
   for (const u of units.values()) {
     const n = node(u.id);
     const shown = !!(u.mesh && u.mesh.visible && n);
@@ -907,7 +987,7 @@ function syncVisibility() {
     const top = topOf(o.id);
     if (!view.result) {
       r.part.visible = !o.neg && !(top && top.neg);
-    } else if (o.parent != null || o.neg) {
+    } else if (!isRoot(o) || o.neg) {
       r.part.visible = false;
     } else {
       const u = units.get(o.id);
@@ -1091,6 +1171,13 @@ function recenterPivot() {
 }
 
 function attachGizmo() {
+  if (view.sunMode) {
+    transform.showX = transform.showY = transform.showZ = true;
+    transform.setMode('translate');
+    transform.setSpace('world');
+    transform.attach(sunHandle);
+    return;
+  }
   if (view.floorMode) return attachFloorGizmo();
   transform.showX = transform.showY = transform.showZ = true;
   const lv = selLeaves().filter((o) => o.visible);
@@ -1176,6 +1263,11 @@ transform.addEventListener('dragging-changed', (e) => {
 });
 
 transform.addEventListener('objectChange', () => {
+  if (transform.object === sunHandle) {
+    state.sun.pos = sunHandle.position.toArray().map((v) => round(v, 3));
+    syncSun();
+    return;
+  }
   applyDirectionalScale();
   if (transform.object && transform.object.userData.floorId) {
     floorFromGizmo(transform.object);
@@ -1367,7 +1459,7 @@ function presentUnit(u) {
 function solve() {
   dirty = false;
   lastSolve = performance.now();
-  const tops = state.nodes.filter((n) => n.parent == null);
+  const tops = state.nodes.filter((n) => isRoot(n) && !isFolder(n));
   const alive = new Set();
   for (const n of tops) {
     if (n.kind === 'light' || !n.visible || (n.neg && !isGroup(n))) continue;
@@ -1421,7 +1513,7 @@ function triCount(g) {
 function tallyStats() {
   let t = 0;
   for (const n of state.nodes) {
-    if (n.kind !== 'part' || n.parent != null || n.neg || !n.visible) continue;
+    if (n.kind !== 'part' || !isRoot(n) || n.neg || !n.visible) continue;
     const u = units.get(n.id);
     const r = rt.get(n.id);
     if (u && u.mesh) continue;
@@ -1650,7 +1742,7 @@ async function settleRounds() {
 const hist = { stack: [], i: -1 };
 
 function projectData() {
-  return { app: 'meshtype', version: VERSION, name: state.name, nextId: state.nextId, nodes: state.nodes, assets: state.assets, floor: state.floor, floors: state.floors };
+  return { app: 'meshtype', version: VERSION, name: state.name, nextId: state.nextId, nodes: state.nodes, assets: state.assets, floor: state.floor, floors: state.floors, sun: state.sun };
 }
 
 function snapshot() {
@@ -1727,7 +1819,9 @@ function restore(data) {
     nextId: p.nextId,
     floor: sanitizeFloor(data.floor),
     floors: [],
+    sun: sanitizeSun(data.sun),
   };
+  syncSun();
   const counter = { value: state.nextId };
   state.floors = sanitizeFloors(data, counter);
   state.nextId = Math.max(state.nextId, counter.value, ...state.floors.map((f) => f.id + 1));
@@ -1947,7 +2041,7 @@ function pasteClipboard() {
     const n = r.kind === 'group' ? sanitizeGroup(r) : r.kind === 'light' ? sanitizeLight(r) : sanitizePart(r);
     if (!n) continue;
     if (n.kind !== 'group') n.pos = [round(n.pos[0] + off), n.pos[1], round(n.pos[2] + off)];
-    if (n.parent != null) delete n.round;
+    if (n.parent != null && !isFolder(node(n.parent))) delete n.round;
     state.nodes.push(n);
     added.push(n);
   }
@@ -1962,6 +2056,7 @@ function toggleVisible(id) {
   const n = node(id);
   if (!n) return;
   n.visible = !n.visible;
+  if (isFolder(n)) for (const d of descendantIds(id)) node(d).visible = n.visible;
   afterEdit();
 }
 
@@ -2005,14 +2100,45 @@ function doUnion(mode = 'union') {
   if (dropped) toast('Round settings on the parts were cleared. Round the finished union instead.');
 }
 
+/** Group (Ctrl+G): a plain parent. Unlike UNION nothing is merged; the parts stay separate meshes. */
+function doGroup() {
+  const tops = uniqueTops();
+  if (!tops.length) return toast('Select things to group.');
+  const id = state.nextId++;
+  const g = sanitizeGroup({ id, name: `Group ${id}`, mode: 'folder' });
+  for (const t of tops) t.parent = id;
+  const first = Math.min(...tops.map((t) => state.nodes.indexOf(t)));
+  state.nodes.splice(first, 0, g);
+  state.sel = [id];
+  state.active = id;
+  afterEdit();
+}
+
+/** Ungroup (Ctrl+Shift+G): removes the selected Groups, one level. */
+function doUngroup() {
+  const folders = liveSel().map(node).filter(isFolder);
+  if (!folders.length) return toast('Select a group to ungroup (UNION shapes use SPLIT).');
+  const out = [];
+  for (const g of folders) {
+    for (const k of kidsOf(g.id)) {
+      k.parent = g.parent;
+      out.push(k.id);
+    }
+    state.nodes = state.nodes.filter((n) => n !== g);
+  }
+  state.sel = out;
+  state.active = out[out.length - 1] ?? null;
+  afterEdit();
+}
+
 function doNegate() {
   const ids = liveSel();
   if (!ids.length) {
     toast('Select something to negate.');
     return;
   }
-  const nodes = ids.map(node).filter((n) => n.kind !== 'light');
-  if (!nodes.length) return toast('Lights cannot be cutters.');
+  const nodes = ids.map(node).filter((n) => n.kind !== 'light' && !isFolder(n));
+  if (!nodes.length) return toast('Lights and groups cannot be cutters. Select the parts inside.');
   const makeNeg = nodes.some((n) => !n.neg);
   for (const n of nodes) {
     n.neg = makeNeg;
@@ -2036,11 +2162,12 @@ function doSplit() {
   const groups = uniqueTops().filter(isGroup);
   const sel = liveSel();
   let targets = groups;
-  if (!sel.length) targets = state.nodes.filter((n) => n.kind === 'group' && n.parent == null);
+  if (!sel.length) targets = state.nodes.filter((n) => isGroup(n) && !isFolder(n) && isRoot(n));
+  targets = targets.filter((n) => !isFolder(n));
   // a child group picked straight from the list also counts
   for (const id of sel) {
     const n = node(id);
-    if (isGroup(n) && !targets.includes(n) && n.parent != null) targets.push(n);
+    if (isGroup(n) && !isFolder(n) && !targets.includes(n) && n.parent != null) targets.push(n);
   }
   if (!targets.length) {
     toast(sel.length ? 'Nothing to split: that is not a union.' : 'There are no unions to split.');
@@ -2265,6 +2392,7 @@ function renderBoolButtons() {
 
 function iconFor(n) {
   if (n.kind === 'light') return 'i-light';
+  if (isFolder(n)) return 'i-folder';
   if (n.kind === 'group') return n.neg ? 'i-group-neg' : 'i-group';
   return n.neg ? 'i-cutter' : 'i-solid';
 }
@@ -2274,8 +2402,8 @@ function renderList() {
   const selSet = new Set(liveSel());
   const emit = (n, depth) => {
     const isSel = selSet.has(n.id);
-    const chip = n.kind === 'light' ? (n.lightType === 'spot' ? 'SPOT' : 'LIGHT') : n.kind === 'group' ? (n.mode === 'int' ? 'INTERSECT' : n.neg ? 'CUTTER' : 'UNION') : n.neg ? 'CUTTER' : 'SOLID';
-    const chipCls = n.kind === 'light' ? 'lit' : n.neg ? 'neg' : n.kind === 'group' ? 'grp' : 'pos';
+    const chip = isFolder(n) ? 'GROUP' : n.kind === 'light' ? (n.lightType === 'spot' ? 'SPOT' : 'LIGHT') : n.kind === 'group' ? (n.mode === 'int' ? 'INTERSECT' : n.neg ? 'CUTTER' : 'UNION') : n.neg ? 'CUTTER' : 'SOLID';
+    const chipCls = isFolder(n) ? 'fld' : n.kind === 'light' ? 'lit' : n.neg ? 'neg' : n.kind === 'group' ? 'grp' : 'pos';
     rows.push(`<li class="row d${Math.min(depth, 3)} ${isSel ? 'sel' : ''} ${n.visible ? '' : 'off'}" data-id="${n.id}">
   <button type="button" class="eye" data-act="vis" title="${n.visible ? 'Hide' : 'Show'}" aria-label="${n.visible ? 'Hide' : 'Show'} ${esc(n.name)}">${n.visible ? '◉' : '○'}</button>
   <svg class="rico" aria-hidden="true"><use href="#${iconFor(n)}"/></svg>
@@ -2328,7 +2456,7 @@ function arrangeHTML() {
 
 function roundHTML(n) {
   const r = n.round || { outer: 0, inner: 0, res: 64, sand: 3 };
-  const top = n.parent == null;
+  const top = isRoot(n);
   if (!top) return '<h2>Round edges</h2><p class="tip">Rounding is applied to a finished top-level part or union. Select the union.</p>';
   if (n.neg) return '<h2>Round edges</h2><p class="tip">Cutters are not rounded. Round the union they are part of.</p>';
   const q = QUALITY.map(([v, l]) => `<option value="${v}" ${String(r.res) === v ? 'selected' : ''}>${l}</option>`).join('');
@@ -2398,6 +2526,10 @@ ${n.lightType === 'spot' ? sl('angle', 'Cone angle°', 5, 89, 1, 0) + sl('penumb
 }
 
 function renderInspector() {
+  if (view.sunMode) {
+    el.inspector.innerHTML = sunHTML();
+    return;
+  }
   if (view.floorMode) {
     el.inspector.innerHTML = floorInspectorHTML();
     return;
@@ -2435,6 +2567,17 @@ ${arrangeHTML()}
   <button type="button" data-set-neg="0" aria-pressed="${!n.neg}">Solid</button>
   <button type="button" data-set-neg="1" aria-pressed="${n.neg}" class="negbtn">Cutter</button></div></div>`;
   void kind;
+  if (isFolder(n)) {
+    const leaves = leavesOf(n.id).filter((o) => o.kind === 'part');
+    el.inspector.innerHTML = `<h2>Group</h2>
+<div class="field"><input id="f-name" type="text" maxlength="60" value="${esc(n.name)}" aria-label="Name" spellcheck="false"></div>
+<p class="hint">${kidsOf(n.id).length} item${kidsOf(n.id).length === 1 ? '' : 's'}, kept as separate meshes (exports as a parent node). Click an item in the list to edit it alone. UNION merges instead.</p>
+${lookHTML(leaves)}
+${tagsHTML([n])}
+${arrangeHTML()}
+<div class="acts"><button type="button" data-act="ungroup">Ungroup</button><button type="button" data-act="dup">Duplicate</button><button type="button" data-act="del" class="danger">Delete</button></div>`;
+    return;
+  }
   if (isGroup(n)) {
     const ks = kidsOf(n.id);
     const cut = ks.filter((k) => k.neg).length;
@@ -2442,7 +2585,7 @@ ${arrangeHTML()}
 <p class="hint">${n.mode === 'int' ? 'Keeps only where its parts overlap.' : `${ks.length - cut} solid${ks.length - cut === 1 ? '' : 's'} blended${cut ? `, ${cut} cutter${cut === 1 ? '' : 's'} subtracted` : ''}.`}
 Click a part in the list to edit it, or SPLIT to take it apart.</p>
 ${lookHTML(leavesOf(n.id))}
-${n.parent == null ? roundHTML(n) : ''}
+${isRoot(n) ? roundHTML(n) : ''}
 ${tagsHTML([n])}
 ${arrangeHTML()}
 <div class="acts"><button type="button" data-act="split">Split</button><button type="button" data-act="dup">Duplicate</button><button type="button" data-act="del" class="danger">Delete</button></div>`;
@@ -2479,6 +2622,10 @@ function updateXformFields(o) {
 /* ------------------------------------------------------------------ */
 
 document.querySelectorAll('[data-add]').forEach((b) => b.addEventListener('click', () => addObject(b.dataset.add)));
+document.querySelectorAll('.grprow [data-act]').forEach((b) => b.addEventListener('click', () => runAction(b.dataset.act)));
+$('#btn-sun').addEventListener('click', () => setSunMode(!view.sunMode));
+$('#btn-iso').addEventListener('click', () => setIso(!view.iso));
+$('#btn-pivot').addEventListener('click', () => setPivot(view.pivot === 'world' ? 'selection' : 'world'));
 document.querySelectorAll('[data-add-light]').forEach((b) => b.addEventListener('click', () => addLight(b.dataset.addLight)));
 el.union.addEventListener('click', () => doUnion('union'));
 el.intersect.addEventListener('click', () => doUnion('int'));
@@ -2711,6 +2858,16 @@ function runAction(a) {
   else if (a.startsWith('mirror:')) doMirror(a.slice(7));
   else if (a.startsWith('dist:')) doDistribute(a.slice(5));
   else if (a === 'split') doSplit();
+  else if (a === 'group') doGroup();
+  else if (a === 'sun-done') setSunMode(false);
+  else if (a === 'sun-reset') {
+    state.sun = sanitizeSun(null);
+    syncSun();
+    attachGizmo();
+    commit();
+    renderInspector();
+  }
+  else if (a === 'ungroup') doUngroup();
   else if (a === 'union') doUnion('union');
   else if (a === 'int') doUnion('int');
   else if (a === 'negate') doNegate();
@@ -3272,6 +3429,18 @@ el.canvas.addEventListener('pointerdown', (e) => {
   if (e.button === 1) e.preventDefault(); // no middle-click autoscroll
   const onGizmo = transform.axis !== null && transform.axis !== undefined;
   downInfo = { x: e.clientX, y: e.clientY, button: e.button, onGizmo, box: false, ground: null, floor: null };
+  if (e.button === 0 && !onGizmo) {
+    const rect0 = el.canvas.getBoundingClientRect();
+    raycaster.setFromCamera(new THREE.Vector2(((e.clientX - rect0.left) / rect0.width) * 2 - 1, -((e.clientY - rect0.top) / rect0.height) * 2 + 1), camera);
+    if (raycaster.intersectObject(sunHandle, false).length) {
+      downInfo = null;
+      if (!view.sunMode) setSunMode(true);
+      return;
+    }
+    if (view.sunMode) {
+      setSunMode(false); // clicking anything else leaves sun mode
+    }
+  }
   if (e.button === 0 && view.mode === 'scale') {
     const h = pickHandle(e.clientX, e.clientY);
     if (h && beginBoxScale(h, e)) {
@@ -3427,7 +3596,7 @@ function surfaceTargets(g) {
     if (u.mesh && u.mesh.visible && n && !n.neg && !g.tops.has(u.id)) list.push(u.mesh);
   }
   for (const n of state.nodes) {
-    if (n.kind !== 'part' || n.parent != null || n.neg || !n.visible || g.ids.has(n.id)) continue;
+    if (n.kind !== 'part' || !isRoot(n) || n.neg || !n.visible || g.ids.has(n.id)) continue;
     const u = units.get(n.id);
     const r = rt.get(n.id);
     if (r && !(u && u.mesh)) list.push(r.part);
@@ -3663,6 +3832,8 @@ function menuItems() {
     { label: allNeg ? 'Make solid' : 'Negate (make cutter)', icon: 'i-negate', key: 'N', act: 'negate' },
     { label: 'Split', icon: 'i-split', key: 'X', act: 'split', disabled: !sel.some((id) => isGroup(node(id)) || isGroup(topOf(id))) },
     { label: 'Intersect', act: 'int', disabled: tops.length < 2 },
+    { label: 'Group', key: 'Ctrl+G', act: 'group' },
+    { label: 'Ungroup', key: 'Ctrl+U', act: 'ungroup', disabled: !sel.some((id) => isFolder(node(id))) },
     { sep: true },
     { label: 'Center in world', act: 'center' },
     { label: 'Align X…', act: 'axis:x', disabled: tops.length < 1 },
@@ -3753,6 +3924,28 @@ window.addEventListener('keydown', (e) => {
     redo();
     return;
   }
+  if (mod && !typing && k === 'g') {
+    e.preventDefault();
+    if (e.shiftKey) doUngroup();
+    else doGroup();
+    return;
+  }
+  if (mod && !typing && k === 'u') {
+    e.preventDefault(); // Ctrl+U is "view source" otherwise
+    doUngroup();
+    return;
+  }
+  if (mod && k === 's') {
+    e.preventDefault();
+    if (e.shiftKey) saveAs();
+    else saveProject();
+    return;
+  }
+  if (mod && e.altKey && e.shiftKey && k === 'w') {
+    e.preventDefault();
+    $('#btn-glb').click();
+    return;
+  }
   if (mod && !typing && !e.shiftKey && (k === 'c' || k === 'x' || k === 'v')) {
     if (k === 'c' && String(window.getSelection && window.getSelection()).length) return; // let real text copy work
     e.preventDefault();
@@ -3768,6 +3961,10 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (mod || e.altKey) return;
+  if (view.sunMode && (k === 'l' || k === 'escape')) {
+    setSunMode(false);
+    return;
+  }
   if (k === 'b') {
     setFloorMode(!view.floorMode);
     return;
@@ -3791,7 +3988,8 @@ window.addEventListener('keydown', (e) => {
   else if (k === '3') setMode('scale');
   else if (k === 'r') quarterTurn('y');
   else if (k === 't') quarterTurn('z');
-  else if (k === 'l') setSpace(view.space === 'world' ? 'local' : 'world');
+  else if (k === 'o') setSpace(view.space === 'world' ? 'local' : 'world');
+  else if (k === 'l') setSunMode(!view.sunMode);
   else if (k === 'f') frameSelected();
   else if (k === 'u') doUnion('union');
   else if (k === 'n') doNegate();
@@ -3844,7 +4042,7 @@ function flyStep(dt) {
   if (k.has('q')) _m.y -= 1;
   if (_m.lengthSq() === 0) return;
   const dist = camera.position.distanceTo(orbit.target);
-  let speed = 2.2 * Math.max(0.5, dist / 4);
+  let speed = 2.2 * Math.max(0.5, dist / lensScale() / 4);
   if (fly.shift) speed *= 0.2;
   if (fly.ctrl) speed *= 3.5;
   _m.normalize().multiplyScalar(speed * dt);
@@ -3852,8 +4050,56 @@ function flyStep(dt) {
   orbit.target.add(_m);
 }
 
+/** Iso view uses a very narrow lens from far away: nearly no perspective, but everything else keeps working. */
+const ISO_FOV = 2.5;
+const NORMAL_FOV = 40;
+const lensScale = () => Math.tan(deg2rad(NORMAL_FOV / 2)) / Math.tan(deg2rad(camera.fov / 2));
+function setIso(on) {
+  if (view.iso === on) return;
+  const dir = camera.position.clone().sub(orbit.target);
+  const k = Math.tan(deg2rad((on ? NORMAL_FOV : ISO_FOV) / 2)) / Math.tan(deg2rad((on ? ISO_FOV : NORMAL_FOV) / 2));
+  view.iso = on;
+  camera.fov = on ? ISO_FOV : NORMAL_FOV;
+  camera.near = on ? 1 : 0.05;
+  camera.far = on ? 20000 : 200;
+  camera.position.copy(orbit.target).addScaledVector(dir, k);
+  camera.updateProjectionMatrix();
+  orbit.maxDistance = Infinity;
+  const b = $('#btn-iso');
+  if (b) {
+    b.setAttribute('aria-pressed', String(on));
+    b.textContent = on ? 'ISO' : 'PERSP';
+  }
+}
+/** Orbit pivot: around the selection (F re-centers on it) or locked to the world center. */
+function setPivot(mode) {
+  view.pivot = mode;
+  if (mode === 'world') {
+    const dir = camera.position.clone().sub(orbit.target);
+    orbit.target.set(0, 0, 0);
+    camera.position.copy(orbit.target).add(dir);
+  }
+  const b = $('#btn-pivot');
+  if (b) {
+    b.setAttribute('aria-pressed', String(mode === 'world'));
+    b.textContent = mode === 'world' ? 'WORLD' : 'SEL';
+    b.title = mode === 'world' ? 'Orbiting the world center (click: orbit the selection)' : 'Orbiting the selection; F re-centers (click: lock to world center)';
+  }
+}
+
 function frameSelected() {
   let lv = selLeaves().filter((o) => o.visible);
+  if (view.pivot === 'world') {
+    // keep the pivot at the world center; just back off until everything fits
+    const all = lv.length ? lv : state.nodes.filter((n) => n.kind === 'part' && n.visible && !n.neg);
+    const b = boxOf(all);
+    for (const f of state.floors) for (const [x, z] of floorCorners(f)) b.expandByPoint(new THREE.Vector3(x, f.pos[1], z));
+    if (b.isEmpty()) return;
+    const reach = Math.max(b.max.length(), b.min.length(), 1);
+    const dir = camera.position.clone().sub(orbit.target).normalize();
+    camera.position.copy(orbit.target).addScaledVector(dir, Math.max(2, reach * 2.2) * lensScale());
+    return;
+  }
   if (!lv.length) lv = state.nodes.filter((n) => n.kind === 'part' && n.visible && !n.neg);
   if (!lv.length) return;
   const box = boxOf(lv);
@@ -3862,7 +4108,7 @@ function frameSelected() {
   const size = box.getSize(new THREE.Vector3()).length() || 1;
   const dir = camera.position.clone().sub(orbit.target).normalize();
   orbit.target.copy(c);
-  camera.position.copy(c).addScaledVector(dir, Math.max(2, size * 1.8));
+  camera.position.copy(c).addScaledVector(dir, Math.max(2, size * 1.8) * lensScale());
 }
 
 /* ------------------------------------------------------------------ */
@@ -3872,6 +4118,18 @@ function frameSelected() {
 $('#btn-undo').addEventListener('click', undo);
 $('#btn-redo').addEventListener('click', redo);
 
+function saveProject() {
+  download(`${slug(state.name)}.meshtype.json`, JSON.stringify(projectData(), null, 2), 'application/json');
+  toast(`Saved ${slug(state.name)}.meshtype.json`);
+}
+function saveAs() {
+  const name = window.prompt('Save as (project name):', state.name);
+  if (!name) return;
+  state.name = name.slice(0, 60);
+  el.name.value = state.name;
+  commit();
+  saveProject();
+}
 $('#btn-save').addEventListener('click', () => {
   download(`${slug(state.name)}.meshtype.json`, JSON.stringify(projectData(), null, 2), 'application/json');
   toast('Project saved');
@@ -3963,8 +4221,32 @@ async function exportRoom() {
   const entries = [];
   const lights = [];
 
+  // Groups (folders) export as empty parent nodes so the hierarchy survives into Godot
+  const folderNodes = new Map();
+  const parentFor = (n) => {
+    if (n.parent == null) return grp;
+    const f = node(n.parent);
+    if (!isFolder(f)) return grp;
+    if (!folderNodes.has(f.id)) {
+      const g3 = new THREE.Group();
+      g3.name = uniqueName(slug(f.name));
+      g3.userData = { meshtype: { id: f.id, kind: 'group', tags: f.tags || [] } };
+      parentFor(f).add(g3);
+      folderNodes.set(f.id, g3);
+    }
+    return folderNodes.get(f.id);
+  };
+  const folderPath = (n) => {
+    const path = [];
+    let p = n.parent != null ? node(n.parent) : null;
+    while (p && isFolder(p)) {
+      path.unshift(folderNodes.get(p.id) ? folderNodes.get(p.id).name : slug(p.name));
+      p = p.parent != null ? node(p.parent) : null;
+    }
+    return path;
+  };
   for (const n of state.nodes) {
-    if (n.parent != null || n.neg || !n.visible || n.kind === 'light') continue;
+    if (!isRoot(n) || isFolder(n) || n.neg || !n.visible || n.kind === 'light') continue;
     const u = units.get(n.id);
     let mesh = null;
     if (u && u.mesh) {
@@ -3991,13 +4273,14 @@ async function exportRoom() {
     const base = uniqueName(slug(n.name));
     mesh.name = base + (collide ? '-col' : '');
     mesh.userData = { meshtype: { id: n.id, kind: isGroup(n) ? 'union' : 'part', tags } };
-    grp.add(mesh);
+    parentFor(n).add(mesh);
     mesh.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(mesh);
     const leaves = leavesOf(n.id);
     entries.push({
       node: mesh.name,
       godotName: base,
+      group: folderPath(n),
       kind: isGroup(n) ? 'union' : 'part',
       id: n.id,
       name: n.name,
@@ -4029,7 +4312,7 @@ async function exportRoom() {
     L.name = uniqueName(slug(n.name));
     if (L.target && L.target.parent === L) L.target.name = `${L.name}-aim`;
     L.userData = { meshtype: { id: n.id, kind: 'light', tags: n.tags || [], shadows: n.shadows } };
-    grp.add(L);
+    parentFor(n).add(L);
     const dir = new THREE.Vector3(0, 0, -1).applyEuler(L.rotation);
     lights.push({
       node: L.name,
@@ -4051,6 +4334,22 @@ async function exportRoom() {
     });
   }
 
+  let sunEntry = null;
+  if (state.sun.export) {
+    const S = new THREE.DirectionalLight(state.sun.color, state.sun.intensity);
+    S.position.fromArray(state.sun.pos);
+    S.lookAt(0, 0, 0);
+    const t = new THREE.Object3D();
+    t.position.set(0, 0, -1);
+    S.add(t);
+    S.target = t;
+    S.name = uniqueName('sun');
+    t.name = `${S.name}-aim`;
+    S.userData = { meshtype: { kind: 'sun', shadows: state.sun.shadows } };
+    grp.add(S);
+    const dir = new THREE.Vector3().fromArray(state.sun.pos).negate().normalize();
+    sunEntry = { node: S.name, godotType: 'DirectionalLight3D', color: state.sun.color, intensity: state.sun.intensity, direction: r3(dir), castShadows: state.sun.shadows };
+  }
   const f = state.floor;
   const floorEntries = [];
   if (f.show) {
@@ -4091,6 +4390,7 @@ async function exportRoom() {
     lightForward: '-Z',
     grid: f.grid,
     floors: floorEntries,
+    sun: sunEntry,
     collisionSuffix: col ? '-col' : null,
     nodes: entries,
     lights,
@@ -4235,7 +4535,52 @@ $('#grid-size').addEventListener('change', (e) => {
   commit();
 });
 
+function setSunMode(on) {
+  if (on && view.floorMode) setFloorMode(false);
+  view.sunMode = on;
+  if (!on) transform.setMode(view.mode);
+  attachGizmo();
+  syncSun();
+  renderInspector();
+  const b = $('#btn-sun');
+  if (b) b.setAttribute('aria-pressed', String(on));
+}
+
+function sunHTML() {
+  const s0 = state.sun;
+  const sl = (key, label, min, max, step) => `<label class="sl"><span class="lb">${label}</span><output id="out-sun-${key}">${Number(s0[key]).toFixed(2)}</output>
+<input type="range" data-sun="${key}" min="${min}" max="${max}" step="${step}" value="${s0[key]}"></label>`;
+  return `<h2>Sun (global light)</h2>
+<p class="hint">Drag the yellow sun with the gizmo; it shines toward the world center. Press L or Esc when done.</p>
+<div class="field"><span class="lbl">Color</span><input id="sun-color" type="color" value="${s0.color}" aria-label="Sun color"></div>
+${sl('intensity', 'Sun strength', 0, 5, 0.05)}
+${sl('ambient', 'Sky light (reflections + fill)', 0, 3, 0.05)}
+<label class="chk"><input id="sun-export" type="checkbox" ${s0.export ? 'checked' : ''}> Export as a DirectionalLight3D</label>
+<label class="chk"><input id="sun-shadows" type="checkbox" ${s0.shadows ? 'checked' : ''}> Casts shadows (in Godot)</label>
+<div class="acts"><button type="button" data-act="sun-reset">Reset sun</button><button type="button" data-act="sun-done">Done (L)</button></div>`;
+}
+
+el.inspector.addEventListener('input', (e) => {
+  const t = e.target;
+  if (!view.sunMode) return;
+  if (t.dataset.sun) {
+    state.sun[t.dataset.sun] = parseFloat(t.value);
+    const out = $(`#out-sun-${t.dataset.sun}`);
+    if (out) out.textContent = parseFloat(t.value).toFixed(2);
+  } else if (t.id === 'sun-color') state.sun.color = t.value;
+  else return;
+  syncSun();
+});
+el.inspector.addEventListener('change', (e) => {
+  const t = e.target;
+  if (!view.sunMode) return;
+  if (t.id === 'sun-export') state.sun.export = t.checked;
+  if (t.id === 'sun-shadows') state.sun.shadows = t.checked;
+  commit();
+});
+
 function setFloorMode(on) {
+  if (on && view.sunMode) setSunMode(false);
   view.floorMode = on;
   document.body.classList.toggle('floor-mode', on);
   if (!on) view.floorSel = null;
@@ -4441,7 +4786,10 @@ const viewTween = { on: false, t0: 0, from: new THREE.Vector3(), q: new THREE.Qu
 const VIEW_DIRS = { front: [0, 0, 1], back: [0, 0, -1], right: [1, 0, 0], left: [-1, 0, 0], top: [0, 1, 0.0001], bottom: [0, -1, 0.0001] };
 
 function setView(name) {
-  const to = new THREE.Vector3(...VIEW_DIRS[name]).normalize();
+  setViewDir(new THREE.Vector3(...VIEW_DIRS[name]));
+}
+function setViewDir(dir) {
+  const to = dir.clone().normalize();
   const from = camera.position.clone().sub(orbit.target);
   viewTween.dist = from.length() || 4;
   from.normalize();
@@ -4460,7 +4808,7 @@ function updateViewCube() {
 
 let vcDrag = null;
 vcEl.addEventListener('pointerdown', (e) => {
-  vcDrag = { x: e.clientX, y: e.clientY, lx: e.clientX, ly: e.clientY, face: e.target.closest('[data-view]'), moved: false };
+  vcDrag = { x: e.clientX, y: e.clientY, lx: e.clientX, ly: e.clientY, face: e.target.closest('[data-view]'), corner: e.target.closest('.vc-corner'), moved: false };
   viewTween.on = false;
   vcEl.setPointerCapture(e.pointerId);
   e.preventDefault();
@@ -4481,8 +4829,31 @@ vcEl.addEventListener('pointermove', (e) => {
 vcEl.addEventListener('pointerup', () => {
   const d = vcDrag;
   vcDrag = null;
-  if (d && !d.moved && d.face) setView(d.face.dataset.view);
+  if (d && !d.moved && d.corner) setViewDir(new THREE.Vector3(...d.corner.dataset.dir.split(',').map(Number)).add(new THREE.Vector3(0, 0.0001, 0)));
+  else if (d && !d.moved && d.face) setView(d.face.dataset.view);
 });
+
+// corner hot spots on every face: click one for the isometric view from that corner
+{
+  const BASIS = {
+    front: [[0, 0, 1], [1, 0, 0], [0, 1, 0]],
+    back: [[0, 0, -1], [-1, 0, 0], [0, 1, 0]],
+    right: [[1, 0, 0], [0, 0, -1], [0, 1, 0]],
+    left: [[-1, 0, 0], [0, 0, 1], [0, 1, 0]],
+    top: [[0, 1, 0], [1, 0, 0], [0, 0, -1]],
+    bottom: [[0, -1, 0], [1, 0, 0], [0, 0, 1]],
+  };
+  for (const face of document.querySelectorAll('.vc-face')) {
+    const [n, r, u] = BASIS[face.dataset.view];
+    for (const [sx, sy, cls] of [[-1, 1, 'tl'], [1, 1, 'tr'], [-1, -1, 'bl'], [1, -1, 'br']]) {
+      const c = document.createElement('div');
+      c.className = `vc-corner ${cls}`;
+      c.dataset.dir = [0, 1, 2].map((i) => n[i] + r[i] * sx + u[i] * sy).join(',');
+      c.title = 'Corner view';
+      face.appendChild(c);
+    }
+  }
+}
 
 function loop() {
   requestAnimationFrame(loop);
@@ -4499,6 +4870,10 @@ function loop() {
   }
   updateViewCube();
   updateScaleBox();
+  // keep the sun handle a readable size and its halo facing the camera
+  const sd = camera.position.distanceTo(sunHandle.position) / lensScale();
+  sunHandle.scale.setScalar(Math.max(0.4, sd * 0.045));
+  sunHandle.children[0].quaternion.copy(camera.quaternion);
   if (dirty && now - lastSolve > 70) solve();
   if (planeDirty) updateAlignPlane();
   orbit.update();
@@ -4554,7 +4929,7 @@ boot();
 // test / automation hooks (only with ?test or ?cli in the URL)
 const AUTOMATION = /[?&](test|cli)\b/.test(location.search);
 if (AUTOMATION) {
-  window.__mt = { transform, pivot, rt, lrt, sbox, camera, getState: () => state };
+  window.__mt = { transform, pivot, rt, lrt, sbox, camera, getState: () => state, getTarget: () => orbit.target.toArray() };
   window.__mt.cli = {
     /** Load a project, solve every boolean and wait for rounding to finish. */
     async load(raw) {
@@ -4587,7 +4962,7 @@ if (AUTOMATION) {
         if (n.parent != null && r.parent != null && n.parent !== r.parent) add('error', `parent ${r.parent} is not a union; the part was moved to the top level`, n);
       }
       for (const n of state.nodes) {
-        if (n.kind === 'part' && n.parent == null && n.neg) add('warn', 'cutter at the top level does nothing (put it in a union)', n);
+        if (n.kind === 'part' && isRoot(n) && n.neg) add('warn', 'cutter at the top level does nothing (put it in a union)', n);
         if (n.kind === 'group' && !n.neg && !kidsOf(n.id).some((k) => !k.neg)) add('error', 'union has no solid parts, so it is empty', n);
         if (n.kind === 'part' && n.type === 'svg' && !state.assets[n.asset]) add('error', `SVG asset "${n.asset}" is missing`, n);
         if (n.kind === 'light' && n.intensity <= 0) add('warn', 'light has zero brightness', n);
@@ -4603,7 +4978,7 @@ if (AUTOMATION) {
       for (const id of overlappingFloors()) add('warn', `floor "${floorById(id).name}" overlaps another floor`);
       if (state.floors.length) {
         for (const n of state.nodes) {
-          if (n.kind !== 'part' || n.parent != null || n.neg || !n.visible) continue;
+          if (n.kind !== 'part' || !isRoot(n) || n.neg || !n.visible) continue;
           const b = leafBox(n);
           const top = Math.max(...state.floors.map((f) => f.pos[1]));
           if (b.min.y < -0.01 && top >= -0.01) add('warn', `pokes ${(-b.min.y).toFixed(2)} m below the floor`, n);
@@ -4646,6 +5021,8 @@ if (AUTOMATION) {
       transform.detach();
       planeMesh.visible = false;
       sbox.group.visible = false;
+      const sunVis = [sunHandle.visible, sunLine.visible];
+      sunHandle.visible = sunLine.visible = false;
       renderer.setSize(tile, tile, false);
       camera.aspect = 1;
       camera.updateProjectionMatrix();
@@ -4663,6 +5040,7 @@ if (AUTOMATION) {
       });
       camera.position.copy(prev.pos);
       orbit.target.copy(prev.target);
+      [sunHandle.visible, sunLine.visible] = sunVis;
       resize();
       return sheet.toDataURL('image/png');
     },

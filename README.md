@@ -1,6 +1,6 @@
 # Meshtype
 
-**v0.6.2.** A tiny browser mesh editor for squircles and glossy Frutiger Aero shapes. Solid and cutter parts, UNION / NEGATE / SPLIT, edge rounding, SVG extrusion, multi-select, and GLB export. No build step. Installable as an app and works offline.
+**v0.7.0.** A tiny browser mesh editor for squircles and glossy Frutiger Aero shapes. Solid and cutter parts, UNION / NEGATE / SPLIT, edge rounding, SVG extrusion, multi-select, and GLB export. No build step. Installable as an app and works offline.
 
 Made because Blender is overkill when all you need is a rounded panel with a dent in it.
 
@@ -64,6 +64,17 @@ Every part, union and light can carry tags: `hall`, `door`, `archway`, `keycard`
 
 With **Room JSON** ticked, Export GLB also downloads `room-name.room.json`. It lists every mesh and light by the exact node name used in the GLB (and the name Godot gives it after stripping `-col`), with its tags, transform, world bounds, material, light settings, the grid size and every floor (size, position, turn, flooring). It's meant for whoever assembles rooms in Godot (you, Claude, or Astra) to map nodes to scenes and scripts without guessing. Chrome may ask once to allow multiple downloads.
 
+## Groups vs unions
+
+**Group** (Ctrl+G, or the Group button under Combine) just puts things under one parent: click any of them and the whole group selects, moves, turns, mirrors and scales together, but every part stays its own mesh. It exports as a parent node with the parts as children, so Godot sees the same hierarchy. **Ungroup** (Ctrl+U) removes the parent. **UNION** is different: it merges the parts into one baked mesh and applies cutters.
+
+## Sun and view
+
+- **Sun** (☀ in the toolbar, or `L`): a visible yellow sun with a dashed line to the world center. Drag it with the gizmo to light the scene from anywhere; set color, strength and sky light (reflections and fill). Tick *Export as a DirectionalLight3D* to put it in the GLB.
+- **View cube corners**: the small squares at each face's corners snap to the isometric view from that corner.
+- **PERSP / ISO** (under the cube): isometric view, with almost no perspective.
+- **SEL / WORLD** (under the cube): SEL orbits the selection (F re-centers on it); WORLD locks the orbit to the world center and F only backs off so everything fits.
+
 ## The combine model
 
 Every shape is either a **solid** or a **cutter** (shown in red). A cutter does nothing on its own. It only cuts when you UNION it with a solid.
@@ -110,7 +121,11 @@ With several things selected the gizmo moves them together.
 | --- | --- |
 | `1` `2` `3` | Move, Rotate, Scale |
 | `R` / `T` | Quarter turn (90°) around Y / around Z |
-| `L` | Toggle World / Local axes |
+| `O` | Toggle World / Local axes |
+| `L` | Sun: drag the global light (Esc or L to finish) |
+| `Ctrl+G` / `Ctrl+U` | Group / ungroup |
+| `Ctrl+S` / `Ctrl+Shift+S` | Save / save as |
+| `Ctrl+Alt+Shift+W` | Export GLB |
 | `B` | Floor mode on/off |
 | `F` | Focus the camera on the selection (everything if nothing is selected) |
 | `C` | Duplicate |
@@ -135,7 +150,7 @@ One part scales in its own (rotated) frame, so a turned part stays clean. Severa
 
 **R** and **T** turn the selection a quarter turn around Y (spin on the floor) and Z (tip over), about the selection's center. Plain keys on purpose: browsers reserve Ctrl+T and no web page can take it.
 
-**World / Local** (toolbar, or `L`) switches the move and rotate gizmos, and the R/T turns, between the world axes and the selected object's own axes. Scaling always uses the object's own axes; scaling a turned part along world axes would skew it, which a mesh like this can't store.
+**World / Local** (toolbar, or `O`) switches the move and rotate gizmos, and the R/T turns, between the world axes and the selected object's own axes. Scaling always uses the object's own axes; scaling a turned part along world axes would skew it, which a mesh like this can't store.
 
 In Floor mode, floors keep the arrow gizmo; hold Ctrl while scaling a floor to pin its far edge. R turns the selected floor 90°.
 
@@ -219,7 +234,7 @@ The service worker caches the whole app. After you edit any file, regenerate the
 node tools/build-precache.mjs
 ```
 
-## Known limits (v0.6.2)
+## Known limits (v0.7.0)
 
 - Booleans are live, so keep Detail at 2 or 3 on dense scenes.
 - Scaling a rotated part from a multi-selection gizmo can introduce shear, which Meshtype can't store. Use Scale on single parts for that.

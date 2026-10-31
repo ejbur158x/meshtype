@@ -86,10 +86,10 @@ ok('rotated part: rotation untouched by scaling', b.rot.join() === rotBefore, `$
 
 // World / Local
 await page.keyboard.press('1');
-await page.keyboard.press('l'); await page.waitForTimeout(200);
-ok('L switches to local', (await page.getAttribute('[data-space="local"]', 'aria-pressed')) === 'true' && (await page.evaluate(() => __mt.transform.space)) === 'local');
-await page.keyboard.press('l');
-ok('L back to world', (await page.evaluate(() => __mt.transform.space)) === 'world');
+await page.keyboard.press('o'); await page.waitForTimeout(200);
+ok('O switches to local', (await page.getAttribute('[data-space="local"]', 'aria-pressed')) === 'true' && (await page.evaluate(() => __mt.transform.space)) === 'local');
+await page.keyboard.press('o');
+ok('O back to world', (await page.evaluate(() => __mt.transform.space)) === 'world');
 await page.keyboard.press('3'); await page.waitForTimeout(300);
 await page.screenshot({ path: '/tmp/meshtype-sbox.png', clip: { x: 262, y: 70, width: 730, height: 650 } });
 console.log('ERRORS:', errs.join('\n') || 'none');
