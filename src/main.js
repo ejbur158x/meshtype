@@ -1,4 +1,4 @@
-// Meshtype v0.7.1
+// Meshtype v0.7.2
 // A small browser mesh editor: squircle primitives, union / negate / split,
 // edge rounding, SVG extrusion, GLB export.
 
@@ -14,7 +14,7 @@ import { inspectSvg, makeSvgGeometry } from './svg.js';
 import { roundMesh, boxUVs } from './rounder.js';
 import { FLOORS, floorMaterial } from './floor.js';
 
-const VERSION = '0.7.1';
+const VERSION = '0.7.2';
 const STORE_KEY = 'meshtype.autosave';
 
 const PRESETS = {
@@ -957,7 +957,10 @@ function decorateUnits() {
       resultGroup.add(u.overlay);
     }
     if (u.overlay) {
-      if (shown) u.overlay.geometry = u.mesh.geometry;
+      if (shown) {
+        u.overlay.geometry = u.mesh.geometry;
+        u.overlay.position.copy(u.mesh.position);
+      }
       u.overlay.visible = picked && !neg;
     }
     if (picked || neg) {
@@ -972,6 +975,7 @@ function decorateUnits() {
         u.edges.geometry = new THREE.EdgesGeometry(u.mesh.geometry, 40);
         u.edgesFor = u.mesh.geometry;
       }
+      u.edges.position.copy(u.mesh.position);
       u.edges.material = neg ? edgeNeg : edgeSel;
       u.edges.visible = true;
     } else if (u.edges) u.edges.visible = false;
@@ -1341,6 +1345,17 @@ function disposeBrush(b) {
   b.geometry.dispose();
 }
 
+/** Like sigOf but blind to where the thing is: same shape, maybe moved. */
+function shapeSigOf(id) {
+  const leaves = leavesOf(id);
+  const o0 = leaves[0] ? leaves[0].pos : [0, 0, 0];
+  return JSON.stringify(leaves.map((o) => [o.type, o.params, o.rot, o.scl, o.neg, o.visible, o.pos.map((v, i) => round(v - o0[i]))]));
+}
+function anchorOf(id) {
+  const l = leavesOf(id)[0];
+  return l ? l.pos.slice() : [0, 0, 0];
+}
+
 function sigOf(id) {
   const n = node(id);
   if (!n) return '';
@@ -1444,15 +1459,20 @@ function presentUnit(u) {
   if (!n) return;
   const want = roundActive(n) && !n.neg;
   const fresh = u.rounded && u.rounded.srcSig === u.sig;
+  // only moved since it was rounded: keep showing the rounded mesh, shifted, while it re-rounds
+  const moved = !fresh && u.rounded && u.rounded.shape === shapeSigOf(u.id);
   if (n.neg) {
     setUnitMesh(u, u.brush ? u.brush.geometry : null, unitNegMat);
-  } else if (want && fresh) {
+  } else if (want && (fresh || moved)) {
     setUnitMesh(u, u.rounded.geo, u.rounded.mats);
+    const now = anchorOf(u.id);
+    u.mesh.position.set(now[0] - u.rounded.anchor[0], now[1] - u.rounded.anchor[1], now[2] - u.rounded.anchor[2]);
   } else if (isGroup(n)) {
     setUnitMesh(u, u.brush ? u.brush.geometry : null, u.brush ? u.brush.material : null);
   } else {
     setUnitMesh(u, null);
   }
+  if (u.mesh && !(want && (fresh || moved))) u.mesh.position.set(0, 0, 0);
   if (u.mesh) u.mesh.visible = n.neg ? true : view.result;
 }
 
@@ -1663,7 +1683,7 @@ function startRound(u, wanted) {
     sand: n.round.sand,
   };
   u.job = { id: jobId, wanted };
-  jobs.set(jobId, { unitId: u.id, srcSig: u.sig, wanted, opts, mats: soup.mats });
+  jobs.set(jobId, { unitId: u.id, srcSig: u.sig, wanted, opts, mats: soup.mats, shape: shapeSigOf(u.id), anchor: anchorOf(u.id) });
   const w = getWorker();
   setProgress(jobId, 0.02);
   if (w) w.postMessage({ job: jobId, opts }, [opts.positions.buffer, opts.triMat.buffer]);
@@ -1692,7 +1712,7 @@ function finishJob(jobId, result, error) {
       for (const gr of result.groups) g.addGroup(gr.start, gr.count, gr.materialIndex);
       g.computeBoundingSphere();
       if (u.rounded) u.rounded.geo.dispose();
-      u.rounded = { srcSig: j.srcSig, key: j.wanted, geo: g, mats: j.mats.length === 1 ? j.mats[0] : j.mats };
+      u.rounded = { srcSig: j.srcSig, key: j.wanted, geo: g, mats: j.mats.length === 1 ? j.mats[0] : j.mats, shape: j.shape, anchor: j.anchor };
       if (j.mats.length === 1) {
         // single material: drop groups so it renders as one mesh
         g.clearGroups();
@@ -2438,20 +2458,26 @@ function arrangeHTML() {
     .map((ax) => `<label class="chk"><input type="checkbox" data-caxis="${ax}" ${view.center[ax] ? 'checked' : ''}> ${ax.toUpperCase()}</label>`)
     .join('');
   const opt = (v, cur, label) => `<option value="${v}" ${v === cur ? 'selected' : ''}>${label}</option>`;
+  const ico = {
+    center: '<svg class="aico" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 1v4M8 11v4M1 8h4M11 8h4" stroke="currentColor" stroke-width="1.4"/></svg>',
+    align: '<svg class="aico" viewBox="0 0 16 16"><path d="M2 1v14" stroke="currentColor" stroke-width="1.6"/><rect x="3.5" y="3" width="9" height="3.5" rx="1" fill="currentColor"/><rect x="3.5" y="9.5" width="5.5" height="3.5" rx="1" fill="currentColor"/></svg>',
+    mirror: '<svg class="aico" viewBox="0 0 16 16"><path d="M8 1v14" stroke="currentColor" stroke-width="1.2" stroke-dasharray="2 1.5"/><path d="M6.5 3.5v9L1.5 12.5z" fill="currentColor"/><path d="M9.5 3.5v9l5 0z" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>',
+    dist: '<svg class="aico" viewBox="0 0 16 16"><rect x="1" y="3" width="3" height="10" rx="0.8" fill="currentColor"/><rect x="6.5" y="3" width="3" height="10" rx="0.8" fill="currentColor"/><rect x="12" y="3" width="3" height="10" rx="0.8" fill="currentColor"/></svg>',
+  };
   return `<h2>Arrange</h2>
-<div class="field"><span class="lbl">Center in world</span>
+<div class="arr-sec"><div class="arr-h">${ico.center}Center in world</div>
   <div class="inline">${cChk}<button type="button" data-act="center">Center</button></div></div>
-<div class="field"><span class="lbl">Align on axis <span class="sub">(shows the target plane)</span></span>
+<div class="arr-sec"><div class="arr-h">${ico.align}Align <span class="sub">(pick an axis to see the target plane)</span></div>
   <div class="seg axis">${axisBtns}</div>
   <div class="two">
     <select id="al-edge" aria-label="Which edge">${opt('min', a.edge, 'Min edge')}${opt('center', a.edge, 'Center')}${opt('max', a.edge, 'Max edge')}</select>
     <select id="al-target" aria-label="Align to">${opt('avg', a.target, 'to Average')}${opt('active', a.target, 'to Active')}${opt('min', a.target, 'to Lowest')}${opt('max', a.target, 'to Highest')}${opt('world', a.target, 'to World 0')}</select>
   </div>
   <button type="button" class="wide" data-act="align">Align</button></div>
-<div class="field"><span class="lbl">Mirror across the selection's center</span>
-  <div class="seg axis">${['x', 'y', 'z'].map((ax) => `<button type="button" data-act="mirror:${ax}">${ax.toUpperCase()}</button>`).join('')}</div></div>
-<div class="field"><span class="lbl">Distribute evenly <span class="sub">(3+ things, ends stay put)</span></span>
-  <div class="seg axis">${['x', 'y', 'z'].map((ax) => `<button type="button" data-act="dist:${ax}">${ax.toUpperCase()}</button>`).join('')}</div></div>`;
+<div class="arr-sec"><div class="arr-h">${ico.mirror}Mirror <span class="sub">(across the selection's center)</span></div>
+  <div class="seg axis">${['x', 'y', 'z'].map((ax) => `<button type="button" data-act="mirror:${ax}">Mirror ${ax.toUpperCase()}</button>`).join('')}</div></div>
+<div class="arr-sec"><div class="arr-h">${ico.dist}Distribute <span class="sub">(equal gaps, 3+ things)</span></div>
+  <div class="seg axis">${['x', 'y', 'z'].map((ax) => `<button type="button" data-act="dist:${ax}">Space ${ax.toUpperCase()}</button>`).join('')}</div></div>`;
 }
 
 function roundHTML(n) {
@@ -2472,6 +2498,34 @@ function roundHTML(n) {
 }
 
 /** Material, tint and texture. For a union this edits every part inside it. */
+/** Parts that material / color / texture edits apply to: everything selected, through unions and groups. */
+function lookTargets() {
+  return selLeaves().filter((o) => o.kind === 'part');
+}
+
+const RESHAPE = ['box', 'block', 'panel', 'disc', 'orb', 'pill'];
+/** Change shape: swap the shape but keep size, place, rotation and material. */
+function reshapeHTML(parts) {
+  const ok = parts.filter((o) => o.type !== 'svg');
+  if (!ok.length) return '';
+  const opts = RESHAPE.map((k) => `<option value="${k}">${PRESETS[k].label}</option>`).join('');
+  return `<div class="field"><span class="lbl">Change shape <span class="sub">(keeps size, place and material)</span></span>
+<select data-reshape="1" aria-label="Change shape"><option value="" selected>Pick a shape…</option>${opts}</select></div>`;
+}
+function doReshape(presetId) {
+  const p = PRESETS[presetId];
+  if (!p) return;
+  let n = 0;
+  for (const o of lookTargets()) {
+    if (o.type === 'svg') continue;
+    o.type = p.type;
+    o.params = JSON.parse(JSON.stringify(p.params));
+    n++;
+  }
+  afterEdit({ keepGizmo: true });
+  toast(`Changed ${n} part${n === 1 ? '' : 's'} to ${p.label}`);
+}
+
 function lookHTML(leaves) {
   if (!leaves.length) return '';
   const first = leaves[0];
@@ -2543,6 +2597,8 @@ function renderInspector() {
     const leaves = selLeaves().length;
     el.inspector.innerHTML = `<h2>${sel.length} selected</h2>
 <p class="hint">${leaves} item${leaves === 1 ? '' : 's'}. Drag the gizmo to move them together.</p>
+${reshapeHTML(lookTargets())}
+${lookHTML(lookTargets())}
 ${tagsHTML(sel.map(node))}
 ${arrangeHTML()}
 <div class="acts"><button type="button" data-act="dup">Duplicate</button><button type="button" data-act="del" class="danger">Delete</button></div>`;
@@ -2600,6 +2656,7 @@ ${arrangeHTML()}
         : '';
   el.inspector.innerHTML = `${head}
 <h2>Shape</h2>
+${reshapeHTML([n])}
 ${sliders}${tip}
 <h2>Transform</h2>
 ${xformRow(n, 'Move', 'pos', 0.05)}${xformRow(n, 'Rotate°', 'rot', 5)}${xformRow(n, 'Scale', 'scl', 0.05)}
@@ -2676,8 +2733,8 @@ el.inspector.addEventListener('input', (e) => {
     if (out) out.textContent = parseFloat(t.value).toFixed(t.dataset.round === 'sand' ? 0 : 3);
     return;
   }
-  if (n && (t.id === 'f-color' || t.dataset.texsize)) {
-    for (const o of leavesOf(n.id)) {
+  if ((t.id === 'f-color' || t.dataset.texsize) && lookTargets().length) {
+    for (const o of lookTargets()) {
       if (t.id === 'f-color') o.color = t.value;
       else o.texSize = parseFloat(t.value);
       applyLook(o);
@@ -2716,6 +2773,25 @@ el.inspector.addEventListener('input', (e) => {
 
 el.inspector.addEventListener('change', (e) => {
   const t = e.target;
+  if (t.dataset.reshape && t.value) {
+    doReshape(t.value);
+    return;
+  }
+  if (t.id === 'f-mat' && MATERIALS[t.value] && !view.floorMode) {
+    for (const o of lookTargets()) {
+      o.mat = t.value;
+      o.color = MATERIALS[o.mat].color;
+      applyLook(o);
+    }
+    const colorInput = $('#f-color');
+    if (colorInput) colorInput.value = MATERIALS[t.value].color;
+    commit();
+    return;
+  }
+  if ((t.id === 'f-color' || t.dataset.texsize) && state.sel.length > 1) {
+    commit();
+    return;
+  }
   if (t.dataset.light || t.id === 'l-color') {
     commit();
     return;
@@ -2890,9 +2966,9 @@ function runAction(a) {
   else if (a === 'light:point') addLight('point');
   else if (a === 'light:spot') addLight('spot');
   else if (a === 'tex-clear') {
-    const n = state.sel.length === 1 ? node(state.sel[0]) : null;
+    const n = lookTargets().length ? true : null;
     if (n) {
-      for (const o of leavesOf(n.id)) {
+      for (const o of lookTargets()) {
         delete o.tex;
         applyLook(o);
       }
@@ -2935,9 +3011,10 @@ scene.add(sbox.group);
   sbox.outline = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x18a0ff, depthTest: false, transparent: true, opacity: 0.9 }));
   sbox.outline.renderOrder = 20;
   sbox.group.add(sbox.outline);
-  const white = new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false });
-  const dark = new THREE.MeshBasicMaterial({ color: 0x1d2a36, depthTest: false });
-  const rim = new THREE.LineBasicMaterial({ color: 0x1d2a36, depthTest: false });
+  // transparent (even at full opacity) so they draw after glass and never get refracted
+  const white = new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true });
+  const dark = new THREE.MeshBasicMaterial({ color: 0x1d2a36, depthTest: false, transparent: true });
+  const rim = new THREE.LineBasicMaterial({ color: 0x1d2a36, depthTest: false, transparent: true });
   const cube = new THREE.BoxGeometry(1, 1, 1);
   const cubeEdges = new THREE.EdgesGeometry(cube);
   // p = position on the box in -1..1 units, d = which axes the handle scales (sign = side)
@@ -3014,7 +3091,7 @@ function updateScaleBox() {
     const p = h.userData.handle.p;
     h.position.set(c.x + (p[0] * size.x) / 2, c.y + (p[1] * size.y) / 2, c.z + (p[2] * size.z) / 2);
     h.getWorldPosition(wp);
-    const k = wp.distanceTo(camera.position) * (h.userData.handle.corner || h.userData.handle.top ? 0.016 : 0.012);
+    const k = (wp.distanceTo(camera.position) / lensScale()) * (h.userData.handle.corner || h.userData.handle.top ? 0.016 : 0.012);
     h.scale.setScalar(k);
   }
 }
@@ -4190,13 +4267,13 @@ el.fileTex.addEventListener('change', async () => {
     }
     return;
   }
-  const n = state.sel.length === 1 ? node(state.sel[0]) : null;
-  if (!file || !n) return;
+  const targets = lookTargets();
+  if (!file || !targets.length) return;
   try {
     const url = await shrinkImage(file, 1024);
     const id = `img${state.nextId++}`;
     state.assets[id] = url;
-    for (const o of leavesOf(n.id)) {
+    for (const o of targets) {
       o.tex = id;
       if (!o.texSize) o.texSize = 0.5;
       applyLook(o);
@@ -4947,7 +5024,7 @@ boot();
 // test / automation hooks (only with ?test or ?cli in the URL)
 const AUTOMATION = /[?&](test|cli)\b/.test(location.search);
 if (AUTOMATION) {
-  window.__mt = { transform, pivot, rt, lrt, sbox, camera, getState: () => state, getTarget: () => orbit.target.toArray() };
+  window.__mt = { transform, pivot, rt, lrt, sbox, camera, units, getState: () => state, getTarget: () => orbit.target.toArray() };
   window.__mt.cli = {
     /** Load a project, solve every boolean and wait for rounding to finish. */
     async load(raw) {

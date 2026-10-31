@@ -1,6 +1,6 @@
 # Meshtype
 
-**v0.7.1.** A tiny browser mesh editor for squircles and glossy Frutiger Aero shapes. Solid and cutter parts, UNION / NEGATE / SPLIT, edge rounding, SVG extrusion, multi-select, and GLB export. No build step. Installable as an app and works offline.
+**v0.7.2.** A tiny browser mesh editor for squircles and glossy Frutiger Aero shapes. Solid and cutter parts, UNION / NEGATE / SPLIT, edge rounding, SVG extrusion, multi-select, and GLB export. No build step. Installable as an app and works offline.
 
 Made because Blender is overkill when all you need is a rounded panel with a dent in it.
 
@@ -39,6 +39,8 @@ node tools/meshtype.mjs build rooms/hall-a.meshtype.json --out ../game/assets/ro
   - **Curve angle** bends a Box or Wall along its whole length, around the vertical axis. The two ends always end up exactly that many degrees apart, however long, tall or thick it is: 90° is a quarter-turn hallway wall, 180° a U, 360° a ring. Negative angles curve the other way. Resize it as usual and the curve keeps its angle. At 0° it is back to a plain 12-triangle box.
 - **Block, Panel, Disc, Orb**: squircles with two sliders. *Outline n* shapes the top view, *Edge n* the side profile (2 = round, 4 = classic squircle, 20 = nearly a box).
 - **Pill**, **SVG** (extrude an SVG), **Light** and **Spot**.
+
+**Change shape** (in the inspector) swaps a part's shape (Box, Block, Panel, Disc, Orb, Pill) and keeps its size, place, rotation and material. With several things selected it changes all of them, and the material, color and texture controls apply to the whole selection too.
 
 ## Building rooms
 
@@ -234,7 +236,7 @@ The service worker caches the whole app. After you edit any file, regenerate the
 node tools/build-precache.mjs
 ```
 
-## Known limits (v0.7.1)
+## Known limits (v0.7.2)
 
 - Booleans are live, so keep Detail at 2 or 3 on dense scenes.
 - Scaling a rotated part from a multi-selection gizmo can introduce shear, which Meshtype can't store. Use Scale on single parts for that.
