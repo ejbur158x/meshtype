@@ -18,13 +18,14 @@ export const FX_DEFAULTS = {
   bloom: { on: true, strength: 0.35, radius: 0.3, threshold: 1.3 },
   outline: { on: false, width: 1, darkness: 0.75, color: '#0b2a44' },
   clay: { on: false, color: '#d8d3cb', glow: true },
+  xray: { on: false, ghost: true, wire: true, opacity: 0.5 },
 };
 
 const LIMITS = {
   'ao.radius': [0.05, 3], 'ao.strength': [0, 1.5], 'ao.falloff': [0.5, 3],
   'shadows.softness': [0, 10], 'shadows.darkness': [0, 1],
   'bloom.strength': [0, 3], 'bloom.radius': [0, 1], 'bloom.threshold': [0.2, 3],
-  'outline.width': [0.5, 4], 'outline.darkness': [0, 1],
+  'outline.width': [0.5, 4], 'outline.darkness': [0, 1], 'xray.opacity': [0.05, 0.95],
 };
 const HEX = /^#[0-9a-f]{6}$/i;
 
@@ -116,6 +117,9 @@ export function createFx({ renderer, scene, camera }) {
   const normalMat = new THREE.MeshNormalMaterial();
   const clayMat = new THREE.MeshStandardMaterial({ color: '#d8d3cb', roughness: 0.85, metalness: 0 });
   const clayGlow = new Map(); // emissive color hex -> clay that still glows
+  // X-ray: see-through copies of each look, and wire lines drawn over everything
+  const ghosts = new Map();
+  const wireMat = new THREE.MeshBasicMaterial({ color: 0x0a6fd8, wireframe: true, transparent: true, opacity: 0.55, depthTest: false, depthWrite: false });
   let s = sanitizeFx(null);
 
   function setSize(w, h) {
@@ -173,6 +177,18 @@ export function createFx({ renderer, scene, camera }) {
     edges.uniforms.cameraFar.value = camera.far;
   }
 
+  function ghostFor(m) {
+    const src = Array.isArray(m) ? m[0] : m;
+    const hex = src && src.color ? src.color.getHexString() : 'cccccc';
+    const key = hex + '|' + s.xray.opacity;
+    let g = ghosts.get(key);
+    if (!g) {
+      g = new THREE.MeshStandardMaterial({ color: '#' + hex, roughness: 0.6, transparent: true, opacity: s.xray.opacity, depthWrite: false, side: THREE.DoubleSide });
+      ghosts.set(key, g);
+    }
+    return g;
+  }
+
   function clayFor(m) {
     if (!s.clay.glow || !m || Array.isArray(m) || !(m.emissiveIntensity > 0) || !m.emissive) return clayMat;
     const key = m.emissive.getHexString() + '|' + m.emissiveIntensity;
@@ -189,11 +205,12 @@ export function createFx({ renderer, scene, camera }) {
   /** Draw a frame. `models` are the meshes clay mode repaints. */
   function render(models) {
     const swapped = [];
-    if (s.clay.on) {
+    const xr = s.xray.on && s.xray.ghost;
+    if (s.clay.on || xr) {
       for (const m of models) {
         if (!m || !m.visible) continue;
         swapped.push([m, m.material]);
-        m.material = clayFor(m.material);
+        m.material = xr ? ghostFor(s.clay.on ? clayMat : m.material) : clayFor(m.material);
       }
     }
     const post = s.ao.on || s.bloom.on || s.outline.on;
@@ -209,6 +226,21 @@ export function createFx({ renderer, scene, camera }) {
       edges.enabled = s.outline.on;
       bloom.enabled = s.bloom.on;
       composer.render();
+    }
+    if (s.xray.on && s.xray.wire) {
+      // every model edge on top, so you can see how things line up behind each other
+      const mask = camera.layers.mask;
+      const bg = scene.background;
+      const auto = renderer.autoClear;
+      camera.layers.set(MODEL_LAYER);
+      scene.background = null;
+      scene.overrideMaterial = wireMat;
+      renderer.autoClear = false;
+      renderer.render(scene, camera);
+      renderer.autoClear = auto;
+      scene.overrideMaterial = null;
+      scene.background = bg;
+      camera.layers.mask = mask;
     }
     for (const [m, mat] of swapped) m.material = mat;
   }

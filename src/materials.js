@@ -141,3 +141,106 @@ export function makeAeroEnvironment(renderer) {
   pmrem.dispose();
   return { sky, envMap };
 }
+
+/**
+ * "Clear sky": deep blue overhead, wispy cirrus, a bright hazy horizon and a calm dark ocean
+ * mirroring it below. Cooler and less green than the Aero sky, so reflections read neutral.
+ */
+export function makeClearSkyEnvironment(renderer) {
+  const w = 2048;
+  const h = 1024;
+  const half = h / 2;
+  const sky = document.createElement('canvas');
+  sky.width = w;
+  sky.height = half;
+  const g = sky.getContext('2d');
+  const grad = g.createLinearGradient(0, 0, 0, half);
+  grad.addColorStop(0, '#1b4596');
+  grad.addColorStop(0.35, '#2f6cc4');
+  grad.addColorStop(0.7, '#6fa3dc');
+  grad.addColorStop(0.9, '#c9dcef');
+  grad.addColorStop(1, '#eef2f5');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, w, half);
+  // seeded so the sky is the same every load
+  let seed = 7;
+  const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  g.filter = 'blur(5px)';
+  for (let i = 0; i < 520; i++) {
+    const y = half * (0.25 + 0.72 * Math.pow(rand(), 0.6)); // thicker toward the horizon
+    const x = rand() * w;
+    const near = y / half;
+    const len = (90 + rand() * 420) * (0.6 + near);
+    const th = (3 + rand() * 14) * (1.2 - near * 0.6);
+    g.save();
+    g.translate(x, y);
+    g.rotate((rand() - 0.5) * 0.35);
+    g.fillStyle = `rgba(255,255,255,${0.05 + rand() * 0.16})`;
+    g.beginPath();
+    g.ellipse(0, 0, len, th, 0, 0, Math.PI * 2);
+    g.fill();
+    if (x + len > w) {
+      g.translate(-w, 0);
+      g.fill();
+    }
+    g.restore();
+  }
+  g.filter = 'none';
+  // horizon haze
+  const haze = g.createLinearGradient(0, half * 0.78, 0, half);
+  haze.addColorStop(0, 'rgba(240,244,247,0)');
+  haze.addColorStop(1, 'rgba(240,244,247,0.9)');
+  g.fillStyle = haze;
+  g.fillRect(0, half * 0.78, w, half * 0.22);
+  // sun
+  const sx = w * 0.62;
+  const sy = half * 0.42;
+  const glow = g.createRadialGradient(sx, sy, 0, sx, sy, 260);
+  glow.addColorStop(0, 'rgba(255,255,255,1)');
+  glow.addColorStop(0.08, 'rgba(255,255,250,0.95)');
+  glow.addColorStop(0.3, 'rgba(255,255,245,0.25)');
+  glow.addColorStop(1, 'rgba(255,255,245,0)');
+  g.fillStyle = glow;
+  g.fillRect(sx - 260, sy - 260, 520, 520);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const c = canvas.getContext('2d');
+  c.drawImage(sky, 0, 0);
+  // the ocean: a darker, slightly blurred mirror of the sky, fading to navy below
+  c.save();
+  c.translate(0, h);
+  c.scale(1, -1);
+  c.filter = 'blur(3px)';
+  c.globalAlpha = 0.85;
+  c.drawImage(sky, 0, 0);
+  c.restore();
+  const sea = c.createLinearGradient(0, half, 0, h);
+  sea.addColorStop(0, 'rgba(200,214,228,0.15)');
+  sea.addColorStop(0.12, 'rgba(30,60,110,0.45)');
+  sea.addColorStop(0.5, 'rgba(12,28,60,0.82)');
+  sea.addColorStop(1, 'rgba(6,14,32,0.95)');
+  c.fillStyle = sea;
+  c.fillRect(0, half, w, half);
+  // sun glint on the water
+  const gy = h - sy;
+  const glint = c.createRadialGradient(sx, gy, 0, sx, gy, 160);
+  glint.addColorStop(0, 'rgba(255,255,255,0.75)');
+  glint.addColorStop(1, 'rgba(255,255,255,0)');
+  c.save();
+  c.translate(sx, gy);
+  c.scale(0.45, 1.6);
+  c.translate(-sx, -gy);
+  c.fillStyle = glint;
+  c.fillRect(sx - 160, gy - 160, 320, 320);
+  c.restore();
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const envMap = pmrem.fromEquirectangular(tex).texture;
+  pmrem.dispose();
+  return { sky: tex, envMap };
+}

@@ -35,12 +35,14 @@ node tools/meshtype.mjs build rooms/hall-a.meshtype.json --out ../game/assets/ro
 
 **Add shape** drops a primitive into the scene:
 
-- **Box** and **Wall**: sharp, 12 triangles, sitting on the floor. Use them for room shells and anything whose edges you never see. A Wall starts at 4 × 3 × 0.2 m.
-  - **Curve angle** bends a Box or Wall along its whole length, around the vertical axis. The two ends always end up exactly that many degrees apart, however long, tall or thick it is: 90° is a quarter-turn hallway wall, 180° a U, 360° a ring. Negative angles curve the other way. Resize it as usual and the curve keeps its angle. At 0° it is back to a plain 12-triangle box.
+- **Box**: sharp, 12 triangles, a 1 m cube sitting on the floor. Stretch it into walls, floors, ceilings and room shells.
+  - **Curve angle** bends a Box along its whole length, around the vertical axis. The two ends always end up exactly that many degrees apart, however long, tall or thick it is: 90° is a quarter-turn hallway wall, 180° a U, 360° a ring. Negative angles curve the other way. Resize it as usual and the curve keeps its angle. At 0° it is back to a plain 12-triangle box.
+- **Cylinder**: sharp, flat caps, no rounded edges. Pillars, pipes, round tables. *Sides* sets how smooth it is.
+- **Arch**: a doorway / hallway opening, square at the bottom with a rounded top (starts at 1.2 × 2.4 × 0.4 m). *Top roundness* 1 is a true half circle, 0 a flat top. It's built at its real size, so the top stays round however wide or tall you make it. Leave it Solid for an arched block, or make it a **Cutter** and UNION it with a wall (a little thicker than the wall) to punch the opening.
 - **Block, Panel, Disc, Orb**: squircles with two sliders. *Outline n* shapes the top view, *Edge n* the side profile (2 = round, 4 = classic squircle, 20 = nearly a box).
 - **Pill**, **SVG** (extrude an SVG) and **Light (Invis)**: a light with no visible object (spot by default, switch to point in the inspector).
 
-**Change shape** (in the inspector) swaps a part's shape (Box, Block, Panel, Disc, Orb, Pill) and keeps its size, place, rotation and material. With several things selected it changes all of them, and the material, color and texture controls apply to the whole selection too.
+**Change shape** (in the inspector) swaps a part's shape (Box, Cylinder, Arch, Block, Panel, Disc, Orb, Pill) and keeps its size, place, rotation and material. With several things selected it changes all of them, and the material, color and texture controls apply to the whole selection too.
 
 ## Building rooms
 
@@ -75,6 +77,12 @@ With **Room JSON** ticked, Export GLB also downloads `room-name.room.json`. It l
 
 **Group** (Ctrl+G, or the Group button under Combine) just puts things under one parent: click any of them and the whole group selects, moves, turns, mirrors and scales together, but every part stays its own mesh. It exports as a parent node with the parts as children, so Godot sees the same hierarchy. **Ungroup** (Ctrl+U) removes the parent. **UNION** is different: it merges the parts into one baked mesh and applies cutters.
 
+## Walk mode
+
+- **Spawn point**: click the orange figure (under PERSP / ORBIT), hover the floor (an orange ghost shows where you'll stand) and click. You start there facing the way the camera looks, and walk mode starts right away. Click the figure again any time to move it. The spawn exports in the GLB as an empty node named `spawn` (facing its -Z) and in the room JSON as `spawn`, so the game can put the player there too.
+- **WALK** (or `P`) walks from the spawn point. WASD to move, Shift to run, mouse to look (click the view to grab the mouse), Esc to stop. There's no jump, same as the game.
+- The panel at the top: **Collide** (walls stop you; parts tagged `no-collide` don't, same as Godot) and **Gravity** (you fall onto floors and step up anything under 40 cm; off, you float and Q/E go down/up), plus **FOV**, walk speed and eye height. Saved in this browser. **Back to spawn** if you get lost; fall off the world and you're put back.
+
 ## Sun and view
 
 - **Look ▾** (toolbar): how the viewport is shaded, so you can actually see depth. Each effect has its own switch and settings, and they're saved in this browser. Viewport only: Godot does its own lighting on import.
@@ -83,6 +91,9 @@ With **Room JSON** ticked, Export GLB also downloads `room-name.room.json`. It l
   - **Glow bloom**: the halo around neon and glow (strength, spread, brightness threshold).
   - **Edge outlines**: thin lines on silhouettes and creases (thickness, darkness, color).
   - **Clay mode**: every surface one matte color, so you only see form and shadow (glow can still show).
+  - **X-ray** (also the X-ray button, or `Z`): see-through surfaces (opacity slider), a wireframe drawn over everything, or both, so you can check how things line up behind walls.
+  - **Camera field of view** for the editor view (20 to 100°). ISO keeps its own narrow lens; walk mode has its own FOV.
+- **Sky ▾ → Clear sky**: deep blue sky, wispy clouds and a calm ocean below, for cooler, neutral reflections than the green-tinted Aero sky. With a solid color background, *Reflections* picks Clear sky or Aero. Your own panorama (Skybox image, *Reflect it*) works for reflections too.
 - **Axes**: the tripod beside the view cube shows X (red), Y (green) and Z (blue), Godot's colors; the cube faces say which side is +X, +Y, +Z. **Y is up**, same as Godot and glTF. (Blender is the odd one out with Z up.)
 
 - **Sun** (☀ in the toolbar, or `L`): a visible yellow sun with a dashed line to the world center. Drag it with the gizmo to light the scene from anywhere; set color, strength and sky light (reflections and fill). Tick *Export as a DirectionalLight3D* to put it in the GLB.
@@ -138,6 +149,8 @@ With several things selected the gizmo moves them together.
 | `R` / `T` | Quarter turn (90°) around Y / around Z |
 | `O` | Toggle World / Local axes |
 | `L` | Sun: drag the global light (Esc or L to finish) |
+| `P` | Walk from the spawn point (Esc stops) |
+| `Z` | X-ray on/off |
 | `Ctrl+G` / `Ctrl+U` | Group / ungroup |
 | `Ctrl+S` / `Ctrl+Shift+S` | Save / save as |
 | `Ctrl+Alt+Shift+W` | Export GLB |
@@ -256,7 +269,7 @@ The service worker caches the whole app. After you edit any file, regenerate the
 node tools/build-precache.mjs
 ```
 
-## Known limits (v0.8.0)
+## Known limits (v0.8.1)
 
 - Booleans are live, so keep Detail at 2 or 3 on dense scenes.
 - Scaling a rotated part from a multi-selection gizmo can introduce shear, which Meshtype can't store. Use Scale on single parts for that.

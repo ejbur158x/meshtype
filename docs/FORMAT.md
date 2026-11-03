@@ -58,6 +58,8 @@ A room is one JSON file, `name.meshtype.json`. You can write it by hand (or as a
 
 | type | params | notes |
 | --- | --- | --- |
+| `cylinder` | `detail` 1..4 | Sharp cylinder along Y, flat caps: diameter × height = size x × size y (size z sets depth). |
+| `arch` | `round` 0..1, `detail` 1..4 | Archway: square bottom, rounded top, through Z. `size` is the real width × height × depth; `round: 1` = half-circle top (rise = half the width), `0` = flat. Use `"neg": true` inside a union with a wall to cut a doorway / hallway. |
 | `box` | `bend` -360..360 (deg) | Sharp, 12 triangles at `bend: 0`. `bend` curves the whole length (X) around the vertical axis so the two ends are exactly `bend` degrees apart: 90 = quarter-turn hallway wall, 180 = U. Keep thickness under the curve radius (`length / bend in radians`). Use boxes for walls, floors, ceilings, room shells. |
 | `squircle` | `nPlan` 2..20, `nProf` 2..20, `detail` 1..4 | Rounded block. `nPlan` = top-view shape, `nProf` = side profile. 2 = round, 4 = classic squircle, 20 = nearly a box. The Aero look. |
 | `pill` | `radius` 0.05..0.5, `length` 0..2, `detail` 1..4 | Capsule along Y; height = `length + 2 × radius`, then × size. |
@@ -110,6 +112,14 @@ A **part** can shine itself (a lamp, a light panel, neon) with `light`:
 | `shadows` | spot `true`, point `false` | casts shadows in Godot |
 
 A spot sits just outside the side it points from; a point sits at the part's center. Exported as `<shape>-light` next to the shape's mesh, and listed in the room JSON with `"attachedTo": "<shape>"`. Picking the `neon` material in the editor turns a point light on automatically.
+
+## Spawn
+
+```json
+"spawn": { "pos": [0, 0, 2], "yaw": 180 }
+```
+
+Top-level, optional. Where walk mode (and the player, in Godot) starts: `pos` is the point on the floor, `yaw` the facing in degrees around Y (0 faces -Z, 180 faces +Z). Exports as an empty node named `spawn`.
 
 ## Tags
 
