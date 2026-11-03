@@ -43,10 +43,14 @@ A room is one JSON file, `name.meshtype.json`. You can write it by hand (or as a
 | `params` | per type | see below |
 | `pos`, `rot`, `size` | `[0,0,0]`, `[0,0,0]`, `[1,1,1]` | see Units |
 | `neg` | `false` | `true` makes it a **cutter** (only does something inside a union) |
-| `mat` | `glass` | `glass`, `gloss`, `bubble`, `frosted`, `chrome`, `matte`, `glow` |
+| `mat` | `glass` | Aero preview: `glass`, `gloss`, `bubble`, `frosted`. Godot-friendly: `satin`, `rubber`, `painted`, `steel`, `mirror`, `ceramic`, `concrete`, `wood`, `acrylic`, `tinted`, `frost`, `neon`, `glow`, `matte`, `chrome` |
 | `color` | per material | `#rrggbb` tint |
 | `visible` | `true` | hidden things don't export |
 | `tags` | none | see Tags |
+| `tex`, `texSize` | none, `0.5` | image asset key wrapped around the part; `texSize` = one repeat in meters |
+| `glow` | `1` | glow strength multiplier (0 to 4) for `neon` / `glow` |
+| `light` | none | a light built into the part, see Lights |
+| `decals` | none | images on faces: `[{ "tex": "key", "face": "pz", "x": 0, "y": 0, "w": 0.8, "rot": 0 }]`. `face` is `pz` front, `nz` back, `px` right, `nx` left, `py` top, `ny` bottom (the part's own sides). `x`, `y` move it from the face center and `w` is its width, in meters; height follows the image. Up to 8. |
 | `round` | none | `{ "outer": 0.05, "inner": 0.03, "res": 64, "sand": 3 }` rounds edges (top-level parts and unions only). Radius in meters; `res` 40 (light) to 200 (slow); `sand` 0 to 10 smooths ripples. Rounded meshes are dense: use sparingly. |
 | `name` | auto | shows in the editor and becomes the node name in the GLB |
 
@@ -87,7 +91,25 @@ A node with `children` is a **union**. Its solid children are blended into one m
 { "name": "Spot", "lightType": "spot", "pos": [0, 2.8, 0], "rot": [-90, 0, 0], "intensity": 80, "range": 10, "angle": 35, "penumbra": 0.3, "shadows": true }
 ```
 
-`intensity` is candela (try 20 to 150 indoors), `range` meters (0 = no limit). Spots shine along their local -Z; `rot: [-90, 0, 0]` points straight down. They export as glTF lights (Godot `OmniLight3D` / `SpotLight3D`).
+`intensity` is candela (try 20 to 150 indoors), `range` meters (0 = no limit). Spots shine along their local -Z; `rot: [-90, 0, 0]` points straight down. They export as glTF lights (Godot `OmniLight3D` / `SpotLight3D`). In the editor these are "Light (Invis)": lights with no visible object.
+
+A **part** can shine itself (a lamp, a light panel, neon) with `light`:
+
+```json
+{ "name": "Ceiling Lamp", "type": "squircle", "params": { "nPlan": 2, "nProf": 10 }, "pos": [0, 2.9, 0], "size": [0.6, 0.08, 0.6], "mat": "glow", "color": "#ffffff",
+  "light": { "type": "spot", "pitch": -90, "intensity": 60, "range": 8, "angle": 45 } }
+```
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `on` | `true` | `false` keeps the settings but turns it off |
+| `type` | `spot` | `spot` or `point` |
+| `pitch`, `yaw` | `-90`, `0` | aim relative to the part: pitch -90 = down, 90 = up, 0 = level; yaw turns it (0 = the part's -Z, 180 = its +Z front) |
+| `color` | match the part | `#rrggbb`; left out it follows the part's tint (or a lightbox image's average color) |
+| `intensity`, `range`, `angle`, `penumbra` | 40 (point 10), 8, 40, 0.4 | as for lights above |
+| `shadows` | spot `true`, point `false` | casts shadows in Godot |
+
+A spot sits just outside the side it points from; a point sits at the part's center. Exported as `<shape>-light` next to the shape's mesh, and listed in the room JSON with `"attachedTo": "<shape>"`. Picking the `neon` material in the editor turns a point light on automatically.
 
 ## Tags
 

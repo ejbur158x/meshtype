@@ -502,3 +502,21 @@ body.floor-mode #btn-floor { color: #7a5a00; }
 .arr-h { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-weight: 600; color: var(--blue-text); }
 .aico { width: 14px; height: 14px; flex: none; color: #2a6fb5; }
 .arr-sec .seg.axis button { font-size: 11px; padding: 2px 4px; }
+
+/* ---------- v0.8: axis tripod, look panel, decals ---------- */
+.vc-face { line-height: 1.05; text-align: center; }
+.vc-face i { display: block; font-style: normal; font-size: 7.5px; font-weight: 700; opacity: 0.75; }
+.vc-axes { position: absolute; top: 26px; right: 88px; z-index: 5; width: 62px; height: 62px; pointer-events: none; overflow: visible; }
+.vc-axes text { font: 700 10px/1 "Segoe UI", Tahoma, sans-serif; paint-order: stroke; stroke: rgba(255, 255, 255, 0.85); stroke-width: 2.5px; }
+.adds .span2 { grid-column: span 2; }
+.fxpanel { left: auto; right: 8px; width: 260px; max-height: calc(100% - 60px); overflow: auto; }
+.fxsec { padding: 6px 0; border-bottom: 1px solid #d6d6d6; }
+.fxsec:last-of-type { border-bottom: 0; }
+.fxsec .fxh { margin-bottom: 2px; }
+.fxsec .tip { margin: 2px 0 0 20px; }
+.fxsec .sl, .fxsec .field, .fxsec .chk.sub2 { margin-left: 20px; }
+.decal { margin: 0 0 8px; padding: 6px; border: 1px solid #c5d3e2; border-radius: 3px; background: rgba(255, 255, 255, 0.55); }
+.decal select { flex: 1; }
+.aim { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; margin: 2px 0 6px; }
+.aim button { min-height: 20px; padding: 0 4px; font-size: 11px; }
+#btn-fx[aria-expanded="true"] { color: #0b4a86; font-weight: 600; }

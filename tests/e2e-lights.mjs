@@ -29,8 +29,10 @@ ok('tag removed', JSON.stringify((await saved()).nodes[0].tags) === '["keycard-r
 // (part scaling is covered by tests/e2e-transform.mjs)
 
 // lights
-await page.click('[data-add-light="point"]'); await page.waitForTimeout(300);
-await page.click('[data-add-light="spot"]'); await page.waitForTimeout(300);
+// one "Light (Invis)" button: add two, make the first a point light
+await page.click('[data-add-light]'); await page.waitForTimeout(300);
+await page.click('[data-ltype="point"]'); await page.waitForTimeout(300);
+await page.click('[data-add-light]'); await page.waitForTimeout(300);
 st = await saved();
 ok('two lights added', st.nodes.filter((n) => n.kind === 'light').length === 2);
 ok('light inspector', await page.isVisible('[data-light="intensity"]') && await page.isVisible('[data-light="angle"]'));

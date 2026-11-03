@@ -219,6 +219,9 @@ function curvedBox(bendDeg, size) {
   const g = new THREE.BoxGeometry(L, H, D, segs, 1, 1);
   const R = L / theta; // signed radius of the centerline
   const pos = g.attributes.position;
+  // keep the unbent coordinates: textures and decals map along the arc without stretching
+  g.setAttribute('flat', pos.clone());
+  g.setAttribute('flatN', g.attributes.normal.clone());
   // never let the inner side pass through the curve's center (that folds the mesh inside out)
   const zLimit = 0.92 * Math.abs(R);
   for (let i = 0; i < pos.count; i++) {

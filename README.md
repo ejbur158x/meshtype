@@ -38,7 +38,7 @@ node tools/meshtype.mjs build rooms/hall-a.meshtype.json --out ../game/assets/ro
 - **Box** and **Wall**: sharp, 12 triangles, sitting on the floor. Use them for room shells and anything whose edges you never see. A Wall starts at 4 × 3 × 0.2 m.
   - **Curve angle** bends a Box or Wall along its whole length, around the vertical axis. The two ends always end up exactly that many degrees apart, however long, tall or thick it is: 90° is a quarter-turn hallway wall, 180° a U, 360° a ring. Negative angles curve the other way. Resize it as usual and the curve keeps its angle. At 0° it is back to a plain 12-triangle box.
 - **Block, Panel, Disc, Orb**: squircles with two sliders. *Outline n* shapes the top view, *Edge n* the side profile (2 = round, 4 = classic squircle, 20 = nearly a box).
-- **Pill**, **SVG** (extrude an SVG), **Light** and **Spot**.
+- **Pill**, **SVG** (extrude an SVG) and **Light (Invis)**: a light with no visible object (spot by default, switch to point in the inspector).
 
 **Change shape** (in the inspector) swaps a part's shape (Box, Block, Panel, Disc, Orb, Pill) and keeps its size, place, rotation and material. With several things selected it changes all of them, and the material, color and texture controls apply to the whole selection too.
 
@@ -56,7 +56,12 @@ Units are meters on both sides, so a room exported here is to scale in Godot.
 
 ### Lights
 
-**Light** and **Spot** (in Add shape, or right-click empty space) place real lights you can see in the viewport: color, brightness in candela, range, and for spots the cone angle and edge softness, plus a "casts shadows" flag. They export inside the GLB as glTF punctual lights, which Godot imports as `OmniLight3D` / `SpotLight3D`. Spots point along their local -Z; the yellow cone shows where.
+There are two kinds:
+
+- **A light built into an object.** Every part has a **Light** section in the inspector: tick *Emit light* and the object itself shines and moves with it. Lamps, light panels, signs. **Spot** (the default) aims a cone you pick: Down / Up / Front / Back / Left / Right buttons, or Tilt and Turn sliders, all relative to the object, so rotating the object aims it. The spot sits just outside the side it points from, so the object never blocks it. **Point** glows out in every direction from inside the object (leave its shadows off, or the object shades its own light in Godot). Color matches the object unless you untick *Match object*. It exports as `<shape>-light` next to the mesh, listed in the room JSON with `attachedTo`.
+- **Light (Invis)** (in Add shape, or right-click empty space): a light with no visible object, for fill light and anything that shouldn't be a mesh. Spot or point, aimed with the rotate gizmo (spots shine along their local -Z; the yellow cone shows where).
+
+Both have color, brightness in candela, range, cone angle and edge softness for spots, and a "casts shadows (in Godot)" flag. They export inside the GLB as glTF punctual lights, which Godot imports as `OmniLight3D` / `SpotLight3D`.
 
 ### Tags
 
@@ -71,6 +76,14 @@ With **Room JSON** ticked, Export GLB also downloads `room-name.room.json`. It l
 **Group** (Ctrl+G, or the Group button under Combine) just puts things under one parent: click any of them and the whole group selects, moves, turns, mirrors and scales together, but every part stays its own mesh. It exports as a parent node with the parts as children, so Godot sees the same hierarchy. **Ungroup** (Ctrl+U) removes the parent. **UNION** is different: it merges the parts into one baked mesh and applies cutters.
 
 ## Sun and view
+
+- **Look ▾** (toolbar): how the viewport is shaded, so you can actually see depth. Each effect has its own switch and settings, and they're saved in this browser. Viewport only: Godot does its own lighting on import.
+  - **Ambient occlusion**: soft shade in corners and where walls meet floors (radius, strength, falloff).
+  - **Sun shadows**: real shadows from the sun (quality, edge softness, darkness), plus *Lights cast shadows too* for lamps and Light (Invis) (slower).
+  - **Glow bloom**: the halo around neon and glow (strength, spread, brightness threshold).
+  - **Edge outlines**: thin lines on silhouettes and creases (thickness, darkness, color).
+  - **Clay mode**: every surface one matte color, so you only see form and shadow (glow can still show).
+- **Axes**: the tripod beside the view cube shows X (red), Y (green) and Z (blue), Godot's colors; the cube faces say which side is +X, +Y, +Z. **Y is up**, same as Godot and glTF. (Blender is the odd one out with Z up.)
 
 - **Sun** (☀ in the toolbar, or `L`): a visible yellow sun with a dashed line to the world center. Drag it with the gizmo to light the scene from anywhere; set color, strength and sky light (reflections and fill). Tick *Export as a DirectionalLight3D* to put it in the GLB.
 - **View cube corners**: the small squares at each face's corners snap to the isometric view from that corner.
@@ -194,7 +207,13 @@ The material list has two groups. **Godot-friendly** ones import into Godot exac
 
 Aero glass, Gloss plastic, Bubble, Frosted glass, Chrome, Matte, Glow. Pick one, then tint it. With a union selected, the material, tint and texture apply to every part in it.
 
-**Texture**: Image… loads a picture (shrunk to 1024 px) and box-projects it onto the shape. Tile size sets how big one repeat is in world units. The tint multiplies the image, so set it to white to see the image colors as-is. It is a simple box projection, so expect seams where a surface turns between directions. Textures export with the GLB.
+**Frosted glass** blurs whatever is behind it (Aero preview; it's real refraction, which Godot's glTF import doesn't carry over). **Frosted glass (Godot)** is the import-safe stand-in: rough and half see-through, no blur.
+
+**Neon** glows, blooms in the viewport and lights the room: picking it turns on the object's own light (a point light, tinted to match); untick *Emit light* to keep just the glow. **Glow strength** sets how hard any glowing material shines. Neon or Glow with an image texture is a **lightbox**: the image itself shines, like a backlit print or a sign. Set the tint to white for its true colors; the light takes the image's average color.
+
+**Texture**: Image… loads a picture (PNG, JPG or SVG; shrunk to 1024 px, SVGs drawn crisp) and wraps it around the whole shape. **Tile size** is in meters on the real size of the part, so stretching a wall repeats the image instead of stretching it, and on a **curved wall** the image runs along the arc without smearing. Rounded shapes (squircles, orbs) still use a box projection, so expect some stretch near where the surface turns. The tint multiplies the image. Textures export with the GLB.
+
+**Decals** put one image on one face, like a sticker: *Image on a face…* drops it on the side facing you, then pick the side, width, position and turn. Transparent parts of a PNG or SVG stay see-through. On curved walls the decal follows the curve. On a glowing material the decal glows too. Decals export as their own meshes (`<shape>-decal1`, no collision). A decal on a part inside a union sits on that part's face, so if a cutter removes that face the decal floats; put decals on the final surface.
 
 ## Export
 
@@ -220,6 +239,7 @@ src/svg.js              SVG -> extruded geometry
 src/rounder.js          edge rounder (signed distance field)
 src/round-worker.js     runs the rounder off the main thread
 src/materials.js        material presets + procedural sky
+src/fx.js               viewport looks: AO, shadows, bloom, outlines, clay
 src/floor.js            baseplate flooring presets (procedural textures)
 tools/                  meshtype.mjs (CLI), build-precache.mjs, make-icons.mjs
 docs/                   FORMAT.md, AGENTS.md, rooms-workflow.yml
@@ -236,13 +256,15 @@ The service worker caches the whole app. After you edit any file, regenerate the
 node tools/build-precache.mjs
 ```
 
-## Known limits (v0.7.2)
+## Known limits (v0.8.0)
 
 - Booleans are live, so keep Detail at 2 or 3 on dense scenes.
 - Scaling a rotated part from a multi-selection gizmo can introduce shear, which Meshtype can't store. Use Scale on single parts for that.
 - Very thin features can misbehave in booleans (a general CSG limit). If you see a sliver, nudge the cutter a little.
 - Round edges is global to the unit and produces a dense mesh. It can't round just one edge.
 - No sculpting or per-vertex editing. Meshtype is a generator and combiner, not a modeler.
+- Look effects are rendered by the browser's GPU; on a weak laptop turn off ambient occlusion first. Adding or removing a light briefly recompiles shaders.
+- Textures from before v0.8 used the part's unscaled size for tile size; on stretched parts they now tile in meters, so re-check the tile size.
 - Projects from v0.1.0 open as one union (cutters become red parts). Intersect layers become plain parts.
 
 ## Tests

@@ -9,7 +9,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<link rel="stylesheet" href="style.css?v=0.7.2">
+<link rel="stylesheet" href="style.css?v=0.8.0">
 <script type="importmap">
 {
   "imports": {
@@ -72,7 +72,7 @@
   <header class="titlebar">
     <span class="logo" aria-hidden="true"></span>
     <span class="word">Meshtype</span>
-    <span class="ver">v0.7.2</span>
+    <span class="ver">v0.8.0</span>
     <input id="project-name" class="proj" type="text" value="untitled" maxlength="60" aria-label="Project name" spellcheck="false">
     <span class="spacer"></span>
     <button id="btn-install" type="button" hidden title="Install Meshtype as an app">Install app</button>
@@ -104,7 +104,7 @@
     <input id="file-open" type="file" accept=".json,application/json" hidden>
     <input id="file-svg" type="file" accept=".svg,image/svg+xml" hidden>
     <input id="file-sky" type="file" accept="image/*" hidden>
-    <input id="file-tex" type="file" accept="image/*" hidden>
+    <input id="file-tex" type="file" accept="image/*,.svg" hidden>
     <input id="file-wall" type="file" accept="image/*" hidden>
   </div>
 
@@ -120,8 +120,7 @@
         <button type="button" data-add="orb">Orb</button>
         <button type="button" data-add="pill">Pill</button>
         <button id="btn-svg" type="button" title="Import an SVG file and extrude it">SVG</button>
-        <button type="button" data-add-light="point" title="Point light (bulb)"><svg class="bico" aria-hidden="true"><use href="#i-light"/></svg>Light</button>
-        <button type="button" data-add-light="spot" title="Spot light (cone)"><svg class="bico" aria-hidden="true"><use href="#i-light"/></svg>Spot</button>
+        <button type="button" data-add-light="spot" title="A light with no visible object: spot or point, set in the inspector. To make an object itself shine, use Light in its own settings."><svg class="bico" aria-hidden="true"><use href="#i-light"/></svg>Light (Invis)</button>
       </div>
 
       <h2>Combine</h2>
@@ -174,7 +173,9 @@
         <label class="chk"><input id="chk-cages" type="checkbox"> Cages</label>
         <button id="btn-sun" type="button" aria-pressed="false" title="Edit the sun: drag it to light the scene (L)">☀ Sun</button>
         <button id="btn-sky" type="button" aria-expanded="false" aria-controls="sky-panel" title="Sky background">Sky ▾</button>
+        <button id="btn-fx" type="button" aria-expanded="false" aria-controls="fx-panel" title="Viewport looks: shadows, ambient occlusion, glow, outlines, clay">Look ▾</button>
       </div>
+      <div id="fx-panel" class="skypanel fxpanel" hidden></div>
       <div id="sky-panel" class="skypanel" hidden>
         <div class="field"><span class="lbl">Background</span>
           <div class="seg wide2">
@@ -208,14 +209,15 @@
         <button id="btn-iso" type="button" aria-pressed="false" title="Perspective / isometric (almost no perspective)">PERSP</button>
         <button id="btn-pivot" type="button" aria-pressed="false" title="The camera orbits a point; F moves it onto the selection. Click: turn around yourself instead">ORBIT</button>
       </div>
+      <svg id="vc-axes" class="vc-axes" viewBox="-32 -32 64 64" aria-label="World axes: X red, Y green (up), Z blue"></svg>
       <div id="vcube" class="vcube" aria-label="View selector. Click a face or drag to orbit.">
         <div class="vc-cube" id="vc-cube">
-          <div class="vc-face" data-view="front" style="--t:translateZ(var(--h))">Front</div>
-          <div class="vc-face" data-view="back" style="--t:rotateY(180deg) translateZ(var(--h))">Back</div>
-          <div class="vc-face" data-view="right" style="--t:rotateY(90deg) translateZ(var(--h))">Right</div>
-          <div class="vc-face" data-view="left" style="--t:rotateY(-90deg) translateZ(var(--h))">Left</div>
-          <div class="vc-face" data-view="top" style="--t:rotateX(90deg) translateZ(var(--h))">Top</div>
-          <div class="vc-face" data-view="bottom" style="--t:rotateX(-90deg) translateZ(var(--h))">Bottom</div>
+          <div class="vc-face" data-view="front" style="--t:translateZ(var(--h))">Front<i>+Z</i></div>
+          <div class="vc-face" data-view="back" style="--t:rotateY(180deg) translateZ(var(--h))">Back<i>−Z</i></div>
+          <div class="vc-face" data-view="right" style="--t:rotateY(90deg) translateZ(var(--h))">Right<i>+X</i></div>
+          <div class="vc-face" data-view="left" style="--t:rotateY(-90deg) translateZ(var(--h))">Left<i>−X</i></div>
+          <div class="vc-face" data-view="top" style="--t:rotateX(90deg) translateZ(var(--h))">Top<i>+Y</i></div>
+          <div class="vc-face" data-view="bottom" style="--t:rotateX(-90deg) translateZ(var(--h))">Bottom<i>−Y</i></div>
         </div>
       </div>
       <div id="empty" class="empty" hidden>Add a shape, or drop an SVG here.</div>
@@ -240,6 +242,6 @@
   <option value="trigger"><option value="alarm"><option value="camera"><option value="switch"><option value="prop"><option value="no-collide">
 </datalist>
 
-<script type="module" src="src/main.js?v=0.7.2"></script>
+<script type="module" src="src/main.js?v=0.8.0"></script>
 </body>
 </html>
