@@ -1,4 +1,4 @@
-// Meshtype v0.8.1
+// Meshtype v0.8.2
 // A small browser mesh editor: squircle primitives, union / negate / split,
 // edge rounding, SVG extrusion, GLB export.
 
@@ -16,7 +16,7 @@ import { FLOORS, floorMaterial } from './floor.js';
 import { createFx, sanitizeFx, MODEL_LAYER } from './fx.js';
 import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
 
-const VERSION = '0.8.1';
+const VERSION = '0.8.2';
 const STORE_KEY = 'meshtype.autosave';
 
 const PRESETS = {
@@ -1868,7 +1868,9 @@ transform.addEventListener('objectChange', () => {
   p.scale.set(Math.max(0.01, p.scale.x), Math.max(0.01, p.scale.y), Math.max(0.01, p.scale.z));
   o.pos = [round(p.position.x), round(p.position.y), round(p.position.z)];
   o.rot = [round(rad2deg(p.rotation.x), 2), round(rad2deg(p.rotation.y), 2), round(rad2deg(p.rotation.z), 2)];
-  o.scl = [round(p.scale.x), round(p.scale.y), round(p.scale.z)];
+  // arches and curved walls are built at their real size: their mesh is never scaled, so the
+  // gizmo's scale (always 1 for them) is not their size
+  if (!isRealSize(o.type, o.params)) o.scl = [round(p.scale.x), round(p.scale.y), round(p.scale.z)];
   updateXformFields(o);
   requestSolve();
   planeDirty = true;
@@ -2817,7 +2819,8 @@ function alignTarget(us, a) {
 /**
  * Mirror the selection across its own center along a world axis. Shapes here are
  * symmetric in their local axes, so a mirror is a move plus the rotation M·R·M;
- * a curved wall flips its bend when the mirror runs across its thickness.
+ * a curved wall flips its bend when the mirror runs across its thickness, and an arch
+ * mirrored across its height turns upside down.
  */
 function doMirror(axis) {
   const i = 'xyz'.indexOf(axis);
@@ -2843,6 +2846,9 @@ function doMirror(axis) {
     p[i] = round(2 * c.getComponent(i) - p[i]);
     o.pos = p;
     const MRM = M.clone().multiply(R).multiply(M);
+    // an arch isn't symmetric top to bottom: mirroring across its height turns it upside down
+    // (a half turn around its depth axis, since it is symmetric left to right)
+    if (o.type === 'arch' && li === 1) MRM.multiply(new THREE.Matrix4().makeRotationZ(Math.PI));
     q.setFromRotationMatrix(MRM);
     eu.setFromQuaternion(q, 'XYZ');
     o.rot = [round(rad2deg(eu.x), 2), round(rad2deg(eu.y), 2), round(rad2deg(eu.z), 2)].map((v) => (Math.abs(v) < 1e-3 ? 0 : v));
@@ -6413,7 +6419,7 @@ boot();
 // test / automation hooks (only with ?test or ?cli in the URL)
 const AUTOMATION = /[?&](test|cli)\b/.test(location.search);
 if (AUTOMATION) {
-  window.__mt = { transform, pivot, rt, lrt, plt, fx, sbox, camera, units, exportRoom, walkState: () => walk, walkSim: (keys, secs) => { fly.keys.clear(); for (const k of keys) fly.keys.add(k); for (let t = 0; t < secs; t += 1 / 60) walkStep(1 / 60); fly.keys.clear(); return walk.feet.toArray(); }, sceneEnv: () => scene.environment, aeroEnv: () => env.envMap, getState: () => state, getTarget: () => orbit.target.toArray() };
+  window.__mt = { transform, pivot, rt, lrt, plt, fx, sbox, camera, units, exportRoom, hist: () => ({ i: hist.i, n: hist.stack.length }), walkState: () => walk, walkSim: (keys, secs) => { fly.keys.clear(); for (const k of keys) fly.keys.add(k); for (let t = 0; t < secs; t += 1 / 60) walkStep(1 / 60); fly.keys.clear(); return walk.feet.toArray(); }, sceneEnv: () => scene.environment, aeroEnv: () => env.envMap, getState: () => state, getTarget: () => orbit.target.toArray() };
   window.__mt.cli = {
     /** Load a project, solve every boolean and wait for rounding to finish. */
     async load(raw) {
