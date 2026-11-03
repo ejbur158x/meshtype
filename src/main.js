@@ -1,4 +1,4 @@
-// Meshtype v0.7.2
+// Meshtype v0.8.0
 // A small browser mesh editor: squircle primitives, union / negate / split,
 // edge rounding, SVG extrusion, GLB export.
 
@@ -13,8 +13,9 @@ import { MATERIALS, applyMaterial, makeAeroEnvironment } from './materials.js';
 import { inspectSvg, makeSvgGeometry } from './svg.js';
 import { roundMesh, boxUVs } from './rounder.js';
 import { FLOORS, floorMaterial } from './floor.js';
+import { createFx, sanitizeFx, MODEL_LAYER } from './fx.js';
 
-const VERSION = '0.7.2';
+const VERSION = '0.8.0';
 const STORE_KEY = 'meshtype.autosave';
 
 const PRESETS = {
@@ -181,7 +182,25 @@ const view = {
   sky: true,
   align: { axis: null, edge: 'center', target: 'avg' },
   center: { x: true, y: true, z: true },
+  fx: loadFx(),
 };
+function loadFx() {
+  try {
+    const saved = localStorage.getItem('meshtype.fx');
+    // automated runs (software GL) start with effects off unless a test turns them on
+    if (!saved && /[?&](test|cli)\b/.test(location.search)) return sanitizeFx({ ao: { on: false }, shadows: { on: false }, bloom: { on: false } });
+    return sanitizeFx(JSON.parse(saved || 'null'));
+  } catch (e) {
+    return sanitizeFx(null);
+  }
+}
+function saveFx() {
+  try {
+    localStorage.setItem('meshtype.fx', JSON.stringify(view.fx));
+  } catch (e) {
+    /* private window: settings just won't stick */
+  }
+}
 
 const node = (id) => state.nodes.find((n) => n.id === id);
 const kidsOf = (id) => state.nodes.filter((n) => n.parent === id);
@@ -290,11 +309,63 @@ function sanitizePart(raw) {
     o.tex = raw.tex;
     o.texSize = clamp(Number(raw.texSize) || 0.5, 0.02, 10);
   }
+  if (Number.isFinite(Number(raw.glow)) && raw.glow !== null && Number(raw.glow) !== 1) o.glow = clamp(Number(raw.glow), 0, 4);
+  const pl = sanitizePartLight(raw.light);
+  if (pl) o.light = pl;
+  const dc = sanitizeDecals(raw.decals);
+  if (dc) o.decals = dc;
   const rd = sanitizeRound(raw.round);
   if (rd) o.round = rd;
   const tg = sanitizeTags(raw.tags);
   if (tg) o.tags = tg;
   return o;
+}
+
+/** A light built into a part (lamps, neon). Spot by default, aimed straight down. */
+function sanitizePartLight(raw) {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const type = raw.type === 'point' ? 'point' : 'spot';
+  const num = (v, d, a, b) => clamp(Number.isFinite(Number(v)) && v !== null && v !== '' ? Number(v) : d, a, b);
+  return {
+    on: raw.on !== false,
+    type,
+    color: /^#[0-9a-f]{6}$/i.test(raw.color || '') ? raw.color : null, // null = match the part
+    intensity: num(raw.intensity, type === 'spot' ? 40 : 10, 0, 5000),
+    range: num(raw.range, 8, 0, 200),
+    angle: num(raw.angle, 40, 1, 89),
+    penumbra: num(raw.penumbra, 0.4, 0, 1),
+    pitch: num(raw.pitch, -90, -90, 90),
+    yaw: num(raw.yaw, 0, -180, 180),
+    shadows: typeof raw.shadows === 'boolean' ? raw.shadows : type === 'spot',
+    ...(raw.auto === true ? { auto: true } : {}),
+  };
+}
+
+/** Image stickers on a face: x, y = offset from the face center (m), w = width (m), rot = degrees. */
+const DECAL_FACES = {
+  pz: { n: [0, 0, 1], r: [1, 0, 0], u: [0, 1, 0], label: 'Front (+Z)' },
+  nz: { n: [0, 0, -1], r: [-1, 0, 0], u: [0, 1, 0], label: 'Back (−Z)' },
+  px: { n: [1, 0, 0], r: [0, 0, -1], u: [0, 1, 0], label: 'Right (+X)' },
+  nx: { n: [-1, 0, 0], r: [0, 0, 1], u: [0, 1, 0], label: 'Left (−X)' },
+  py: { n: [0, 1, 0], r: [1, 0, 0], u: [0, 0, -1], label: 'Top (+Y)' },
+  ny: { n: [0, -1, 0], r: [1, 0, 0], u: [0, 0, 1], label: 'Bottom (−Y)' },
+};
+function sanitizeDecals(arr) {
+  if (!Array.isArray(arr)) return undefined;
+  const num = (v, d, a, b) => clamp(Number.isFinite(Number(v)) && v !== null && v !== '' ? Number(v) : d, a, b);
+  const out = [];
+  for (const d of arr) {
+    if (!d || typeof d.tex !== 'string' || !d.tex) continue;
+    out.push({
+      tex: d.tex,
+      face: DECAL_FACES[d.face] ? d.face : 'pz',
+      x: num(d.x, 0, -100, 100),
+      y: num(d.y, 0, -100, 100),
+      w: num(d.w, 0.5, 0.02, 100),
+      rot: num(d.rot, 0, -180, 180),
+    });
+  }
+  return out.length ? out.slice(0, 8) : undefined;
 }
 
 const TAG_PRESETS = ['room', 'hall', 'door', 'archway', 'keycard', 'locked', 'window', 'vent', 'stairs', 'elevator', 'spawn', 'exit', 'trigger', 'alarm', 'camera', 'switch', 'prop', 'no-collide'];
@@ -515,8 +586,57 @@ camera.position.set(2.6, 1.7, 3.1);
 
 const sun = new THREE.DirectionalLight(0xffffff, 1.1);
 sun.position.set(3, 5, 2);
+sun.shadow.bias = -0.0004;
+sun.shadow.normalBias = 0.02;
 scene.add(sun);
 scene.add(sun.target);
+
+/* viewport looks (AO, shadows, bloom, outlines, clay): editor only, see fx.js */
+const fx = createFx({ renderer, scene, camera });
+view.fx = fx.set(view.fx);
+
+/** Mark a mesh as part of the model: it casts/receives viewport shadows and AO + outlines see it. */
+function tagModel(mesh, cast = true) {
+  mesh.layers.enable(MODEL_LAYER);
+  mesh.castShadow = cast;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+/** Point the sun's shadow camera at whatever is in the scene, keeping the sun's direction. */
+const shadowBox = new THREE.Box3();
+let shadowFitAt = 0;
+function fitSunShadow(now) {
+  const f = view.fx.shadows;
+  sun.castShadow = f.on;
+  if (!f.on) return;
+  if (now - shadowFitAt < 250) return;
+  shadowFitAt = now;
+  shadowBox.makeEmpty();
+  for (const g of [partsGroup, resultGroup]) shadowBox.expandByObject(g);
+  for (const r of frt.values()) if (r.mesh.visible) shadowBox.expandByObject(r.mesh);
+  if (shadowBox.isEmpty()) shadowBox.setFromCenterAndSize(new THREE.Vector3(), new THREE.Vector3(4, 4, 4));
+  const c = shadowBox.getCenter(new THREE.Vector3());
+  const rad = Math.max(2, shadowBox.getSize(new THREE.Vector3()).length() / 2);
+  const dir = new THREE.Vector3().fromArray(state.sun.pos).normalize();
+  sun.position.copy(c).addScaledVector(dir, rad * 2);
+  sun.target.position.copy(c);
+  const cam = sun.shadow.camera;
+  cam.left = cam.bottom = -rad;
+  cam.right = cam.top = rad;
+  cam.near = 0.1;
+  cam.far = rad * 4.2;
+  cam.updateProjectionMatrix();
+  if (sun.shadow.mapSize.x !== f.quality) {
+    sun.shadow.mapSize.set(f.quality, f.quality);
+    if (sun.shadow.map) {
+      sun.shadow.map.dispose();
+      sun.shadow.map = null;
+    }
+  }
+  sun.shadow.radius = f.softness;
+  sun.shadow.intensity = f.darkness;
+}
 
 /* The global sun: a visible, draggable handle (press L). It shines from the handle toward the world center. */
 const DEFAULT_SUN = { pos: [6, 10, 4], color: '#fff6e8', intensity: 1.1, ambient: 1, export: false, shadows: true };
@@ -671,7 +791,7 @@ function syncFloors() {
   for (const f of state.floors) {
     let r = frt.get(f.id);
     if (!r) {
-      const mesh = new THREE.Mesh(slabGeo, floorMat(f.preset, f));
+      const mesh = tagModel(new THREE.Mesh(slabGeo, floorMat(f.preset, f)), false);
       mesh.userData.floorId = f.id;
       const edges = new THREE.LineSegments(slabEdges, floorEdgeMat.idle);
       edges.renderOrder = 12;
@@ -784,11 +904,36 @@ function hiGeometryFor(o) {
   return makeGeometry(o.type, params, o.scl);
 }
 
-function setBoxUVs(g) {
+/**
+ * Texture coordinates in meters on the part's real size, so an image keeps its proportions
+ * however the part is stretched. Curved walls use their unbent coordinates: the image runs
+ * along the arc instead of smearing where the wall turns.
+ */
+function setBoxUVs(g, scl = [1, 1, 1]) {
   const pos = g.attributes.position;
   if (!pos || !pos.count) return;
   if (!g.attributes.normal) g.computeVertexNormals();
-  g.setAttribute('uv', new THREE.BufferAttribute(boxUVs(pos.array, g.attributes.normal.array), 2));
+  if (g.attributes.flat) {
+    g.setAttribute('uv', new THREE.BufferAttribute(boxUVs(g.attributes.flat.array, g.attributes.flatN.array), 2));
+    return;
+  }
+  const p = pos.array;
+  const n = g.attributes.normal.array;
+  const sp = new Float32Array(p.length);
+  const sn = new Float32Array(n.length);
+  for (let i = 0; i < p.length; i += 3) {
+    sp[i] = p[i] * scl[0];
+    sp[i + 1] = p[i + 1] * scl[1];
+    sp[i + 2] = p[i + 2] * scl[2];
+    const x = n[i] / scl[0];
+    const y = n[i + 1] / scl[1];
+    const z = n[i + 2] / scl[2];
+    const l = Math.hypot(x, y, z) || 1;
+    sn[i] = x / l;
+    sn[i + 1] = y / l;
+    sn[i + 2] = z / l;
+  }
+  g.setAttribute('uv', new THREE.BufferAttribute(boxUVs(sp, sn), 2));
 }
 
 const texBase = new Map(); // asset id -> loaded texture (shared image)
@@ -797,21 +942,52 @@ function baseTexture(assetId) {
   if (t) return t;
   const url = state.assets[assetId];
   if (!url) return null;
-  t = new THREE.TextureLoader().load(url);
+  t = new THREE.TextureLoader().load(url, () => {
+    // images load late: refresh the parts and lights that use this one
+    for (const o of state.nodes) if (o.kind === 'part' && o.tex === assetId && rt.get(o.id)) applyLook(o, true);
+  });
   t.colorSpace = THREE.SRGBColorSpace;
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.anisotropy = 8;
   texBase.set(assetId, t);
   return t;
+}
+
+/** Average color of an image asset (for lights that shine "through" a backlit texture). */
+const avgColors = new Map();
+function averageColor(assetId) {
+  if (avgColors.has(assetId)) return avgColors.get(assetId);
+  const t = texBase.get(assetId);
+  const img = t && t.image;
+  if (!img || !(img.width > 0)) return null;
+  const c = document.createElement('canvas');
+  c.width = c.height = 8;
+  const g = c.getContext('2d');
+  g.drawImage(img, 0, 0, 8, 8);
+  const d = g.getImageData(0, 0, 8, 8).data;
+  let r = 0, gg = 0, b = 0, w = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    const a = d[i + 3] / 255;
+    r += d[i] * a;
+    gg += d[i + 1] * a;
+    b += d[i + 2] * a;
+    w += a;
+  }
+  const hex = w > 0 ? '#' + new THREE.Color(r / w / 255, gg / w / 255, b / w / 255).getHexString() : null;
+  avgColors.set(assetId, hex);
+  return hex;
 }
 
 /** Material preset + tint + optional image texture. Cheap when nothing changed. */
 function applyLook(o, force = false) {
   const r = ensureRT(o);
   const want = o.tex && state.assets[o.tex] ? o.tex : null;
-  const key = JSON.stringify([o.mat, o.color, want, o.texSize]);
+  const key = JSON.stringify([o.mat, o.color, want, o.texSize, o.glow]);
   if (!force && r.lookKey === key) return;
   r.lookKey = key;
   applyMaterial(r.material, o.mat, o.color);
+  const glowing = !!MATERIALS[o.mat].emissive;
+  if (glowing) r.material.emissiveIntensity *= o.glow ?? 1;
   if (want) {
     if (!r.tex || r.texAsset !== want) {
       if (r.tex) r.tex.dispose();
@@ -825,13 +1001,19 @@ function applyLook(o, force = false) {
       r.tex.needsUpdate = true;
     }
     r.material.map = r.tex;
+    // a glowing material with an image is a lightbox: the image itself shines, like a backlit print
+    r.material.emissiveMap = glowing ? r.tex : null;
+    if (glowing) r.material.emissiveIntensity *= 0.45;
   } else {
     if (r.tex) r.tex.dispose();
     r.tex = null;
     r.texAsset = null;
     r.material.map = null;
+    r.material.emissiveMap = null;
   }
   r.material.needsUpdate = true;
+  for (const d of r.decalMeshes || []) styleDecal(d.mesh.material, o);
+  syncPartLight(o);
 }
 
 function ensureRT(o) {
@@ -841,13 +1023,13 @@ function ensureRT(o) {
   applyMaterial(material, o.mat, o.color);
   const proxy = new THREE.Mesh(emptyGeo, hitMat);
   proxy.userData.id = o.id;
-  const part = new THREE.Mesh(emptyGeo, material);
+  const part = tagModel(new THREE.Mesh(emptyGeo, material));
   const w = new THREE.Mesh(emptyGeo, ghost.wireSel);
   const f = new THREE.Mesh(emptyGeo, ghost.fillNeg);
   w.renderOrder = 10;
   proxy.add(part, w, f);
   partsGroup.add(proxy);
-  r = { proxy, part, wire: w, fill: f, geo: null, key: '', material, hiGeo: null, hiKey: '', tex: null, texAsset: null, lookKey: '' };
+  r = { proxy, part, wire: w, fill: f, geo: null, key: '', uvKey: '', material, hiGeo: null, hiKey: '', tex: null, texAsset: null, lookKey: '', decalMeshes: [], decalKey: '' };
   rt.set(o.id, r);
   return r;
 }
@@ -861,10 +1043,16 @@ function syncRT(o) {
   if (r.key !== key) {
     const old = r.geo;
     r.geo = geometryFor(o);
-    setBoxUVs(r.geo);
+    r.geo.computeBoundingBox();
     r.key = key;
+    r.uvKey = '';
     r.proxy.geometry = r.part.geometry = r.wire.geometry = r.fill.geometry = r.geo;
     if (old) old.dispose();
+  }
+  const uvKey = r.key + (bent ? '' : JSON.stringify(o.scl));
+  if (r.uvKey !== uvKey) {
+    setBoxUVs(r.geo, bent ? [1, 1, 1] : o.scl);
+    r.uvKey = uvKey;
   }
   r.proxy.position.fromArray(o.pos);
   r.proxy.rotation.set(deg2rad(o.rot[0]), deg2rad(o.rot[1]), deg2rad(o.rot[2]), 'XYZ');
@@ -872,6 +1060,7 @@ function syncRT(o) {
   else r.proxy.scale.fromArray(o.scl);
   r.proxy.visible = o.visible;
   applyLook(o);
+  syncDecals(o, r);
 }
 
 /** Leaves whose own cages should show. A selected top-level union shows as one baked shape instead. */
@@ -1018,7 +1207,9 @@ function syncAll() {
 function clearRT() {
   transform.detach();
   for (const id of [...lrt.keys()]) disposeLight(id);
+  for (const id of [...plt.keys()]) disposePartLight(id);
   for (const r of rt.values()) {
+    clearDecals(r);
     partsGroup.remove(r.proxy);
     if (r.geo) r.geo.dispose();
     if (r.hiGeo) r.hiGeo.dispose();
@@ -1028,6 +1219,9 @@ function clearRT() {
   rt.clear();
   for (const t of texBase.values()) t.dispose();
   texBase.clear();
+  avgColors.clear();
+  for (const e of decalTex.values()) if (e.tex) e.tex.dispose();
+  decalTex.clear();
   for (const u of [...units.values()]) disposeUnit(u);
   units.clear();
 }
@@ -1099,6 +1293,7 @@ function syncLight(o) {
   r.light.intensity = o.intensity;
   r.light.distance = o.range;
   r.light.decay = 2;
+  r.light.castShadow = !!o.shadows && view.fx.shadows.on && view.fx.shadows.lamps;
   r.bulb.material.color.set(o.color);
   if (r.cone) {
     r.light.angle = deg2rad(o.angle);
@@ -1123,7 +1318,7 @@ function addLight(type) {
   const id = state.nextId;
   const o = sanitizeLight({
     id: state.nextId++,
-    name: `${type === 'spot' ? 'Spot' : 'Light'} ${id}`,
+    name: `Light ${id}`,
     lightType: type,
     pos: [0, 2.4, 0],
     rot: type === 'spot' ? [-90, 0, 0] : [0, 0, 0],
@@ -1132,6 +1327,318 @@ function addLight(type) {
   state.sel = [o.id];
   state.active = o.id;
   afterEdit();
+}
+
+/* ---- lights built into parts (lamps, neon) ---- */
+
+/** part id -> { light, type, cone } ; world-space lights that follow their part every frame */
+const plt = new Map();
+function disposePartLight(id) {
+  const r = plt.get(id);
+  if (!r) return;
+  scene.remove(r.light);
+  if (r.light.target && r.light.target.parent === scene) scene.remove(r.light.target);
+  if (r.cone) scene.remove(r.cone);
+  r.light.dispose();
+  plt.delete(id);
+}
+/** Neon lights the room by itself: switching to it turns its light on; switching away removes that automatic light. */
+function autoNeonLight(o) {
+  const auto = !!MATERIALS[o.mat].autoLight;
+  if (auto && !o.light) o.light = sanitizePartLight({ on: true, type: 'point', intensity: 8, range: 5, shadows: false, auto: true });
+  else if (!auto && o.light && o.light.auto) delete o.light;
+}
+function partLightOn(o) {
+  if (!o || o.kind !== 'part' || !o.light || !o.light.on || !o.visible || o.neg) return false;
+  const top = topOf(o.id);
+  return !(top && top.neg);
+}
+function partLightColor(o) {
+  if (o.light.color) return o.light.color;
+  if (o.tex && MATERIALS[o.mat].emissive) return averageColor(o.tex) || o.color;
+  return o.color;
+}
+/** pitch -90 = straight down, 0 = level; yaw turns it around the part's up axis. 0/0 = the part's -Z. */
+function lightDirLocal(L) {
+  const p = deg2rad(L.pitch);
+  const y = deg2rad(L.yaw);
+  return new THREE.Vector3(Math.sin(y) * Math.cos(p), Math.sin(p), -Math.cos(y) * Math.cos(p));
+}
+/** Where a part's light sits and where it points. A spot sits just outside the side it shines from. */
+function partLightPose(o) {
+  const r = rt.get(o.id);
+  if (!r || !r.geo || !r.geo.attributes.position || !r.geo.attributes.position.count) return null;
+  r.proxy.updateMatrixWorld(true);
+  const dl = lightDirLocal(o.light);
+  const dir = dl.clone().applyQuaternion(r.proxy.getWorldQuaternion(new THREE.Quaternion())).normalize();
+  if (!r.geo.boundingBox) r.geo.computeBoundingBox();
+  const bb = r.geo.boundingBox;
+  const sv = r.proxy.scale;
+  const local = bb.getCenter(new THREE.Vector3());
+  if (o.light.type === 'spot') {
+    const half = bb.getSize(new THREE.Vector3()).multiply(sv).multiplyScalar(0.5);
+    let t = Infinity;
+    for (const k of ['x', 'y', 'z']) if (Math.abs(dl[k]) > 1e-6) t = Math.min(t, half[k] / Math.abs(dl[k]));
+    if (!Number.isFinite(t)) t = 0;
+    local.add(dl.clone().multiplyScalar(t + 0.03).divide(sv));
+  }
+  return { pos: local.applyMatrix4(r.proxy.matrixWorld), dir };
+}
+function syncPartLight(o) {
+  if (!partLightOn(o)) {
+    disposePartLight(o.id);
+    return;
+  }
+  const L = o.light;
+  let r = plt.get(o.id);
+  if (r && r.type !== L.type) {
+    disposePartLight(o.id);
+    r = null;
+  }
+  if (!r) {
+    const light = L.type === 'spot' ? new THREE.SpotLight() : new THREE.PointLight();
+    let cone = null;
+    if (L.type === 'spot') {
+      scene.add(light.target);
+      cone = new THREE.Mesh(coneGeo, coneMat);
+      cone.visible = false;
+      scene.add(cone);
+    }
+    scene.add(light);
+    r = { light, type: L.type, cone };
+    plt.set(o.id, r);
+  }
+  r.light.color.set(partLightColor(o));
+  r.light.intensity = L.intensity;
+  r.light.distance = L.range;
+  r.light.decay = 2;
+  if (L.type === 'spot') {
+    r.light.angle = deg2rad(L.angle);
+    r.light.penumbra = L.penumbra;
+    const len = 1.2;
+    const rad = Math.tan(deg2rad(L.angle)) * len;
+    r.cone.scale.set(rad, rad, len);
+  }
+  // a point light sits inside its own part, so it never casts viewport shadows (it would only shade itself)
+  r.light.castShadow = L.type === 'spot' && L.shadows && view.fx.shadows.on && view.fx.shadows.lamps;
+  placePartLight(o, r);
+}
+function placePartLight(o, r) {
+  const pose = partLightPose(o);
+  if (!pose) return;
+  r.light.position.copy(pose.pos);
+  if (r.type === 'spot') {
+    r.light.target.position.copy(pose.pos).add(pose.dir);
+    r.cone.position.copy(pose.pos);
+    r.cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), pose.dir);
+  }
+}
+const _avgTick = { n: 0 };
+function updatePartLights() {
+  const pick = new Set(liveSel());
+  for (const [id, r] of plt) {
+    const o = node(id);
+    if (!o) {
+      disposePartLight(id);
+      continue;
+    }
+    placePartLight(o, r);
+    if (r.cone) r.cone.visible = pick.has(id) || view.cages;
+  }
+  // backlit textures may finish loading after the light was made: catch the color up now and then
+  if (++_avgTick.n % 30 === 0) for (const id of plt.keys()) refreshPartLightColor(id);
+}
+function refreshPartLightColor(id) {
+  const o = node(id);
+  const r = plt.get(id);
+  if (o && r && o.light) r.light.color.set(partLightColor(o));
+}
+
+/* ---- image decals: stickers on one face of a part ---- */
+
+const decalTex = new Map(); // asset id -> { tex, aspect, pad, ready, url }
+function decalTexture(id) {
+  let e = decalTex.get(id);
+  if (e && e.url === state.assets[id]) return e;
+  e = { tex: null, aspect: 1, pad: [0, 0], ready: false, url: state.assets[id] };
+  decalTex.set(id, e);
+  if (!e.url) return e;
+  const img = new Image();
+  img.onload = () => {
+    const W = img.naturalWidth || img.width || 256;
+    const H = img.naturalHeight || img.height || 256;
+    // a clear border: outside the sticker the clamped texture is see-through
+    const p = Math.max(2, Math.round(Math.max(W, H) / 200));
+    const c = document.createElement('canvas');
+    c.width = W + 2 * p;
+    c.height = H + 2 * p;
+    c.getContext('2d').drawImage(img, p, p, W, H);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.anisotropy = 8;
+    Object.assign(e, { tex, aspect: W / H, pad: [p / c.width, p / c.height], ready: true });
+    for (const o of state.nodes) {
+      if (o.kind !== 'part' || !(o.decals || []).some((d) => d.tex === id)) continue;
+      const r = rt.get(o.id);
+      if (r) syncDecals(o, r);
+    }
+  };
+  img.src = e.url;
+  return e;
+}
+function styleDecal(mat, o) {
+  const glowing = !!MATERIALS[o.mat].emissive;
+  mat.emissiveMap = glowing ? mat.map : null;
+  mat.emissive.set(glowing ? '#ffffff' : '#000000');
+  mat.emissiveIntensity = glowing ? 1.4 * (o.glow ?? 1) : 0;
+  mat.needsUpdate = true;
+}
+/** Face coordinates of every vertex, in meters on the real (unbent) part. */
+function flatCoords(o, g) {
+  const pos = g.attributes.position;
+  const flat = g.attributes.flat;
+  const flatN = g.attributes.flatN;
+  const nor = g.attributes.normal;
+  const sv = flat ? [1, 1, 1] : o.scl;
+  const n = pos.count;
+  const P = new Float32Array(n * 3);
+  const N = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    for (let k = 0; k < 3; k++) {
+      P[i * 3 + k] = flat ? flat.array[i * 3 + k] : pos.array[i * 3 + k] * sv[k];
+      N[i * 3 + k] = flat ? flatN.array[i * 3 + k] : nor.array[i * 3 + k] / sv[k];
+    }
+    const l = Math.hypot(N[i * 3], N[i * 3 + 1], N[i * 3 + 2]) || 1;
+    N[i * 3] /= l;
+    N[i * 3 + 1] /= l;
+    N[i * 3 + 2] /= l;
+  }
+  return { P, N };
+}
+/** The part's triangles that face the decal's side, with UVs that place the image on that face. */
+function buildDecalGeometry(o, r, d, e) {
+  const g = r.geo;
+  const pos = g.attributes.position;
+  if (!pos || !pos.count || !g.attributes.normal) return null;
+  const nor = g.attributes.normal;
+  const { P, N } = flatCoords(o, g);
+  const F = DECAL_FACES[d.face];
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < pos.count; i++) for (let k = 0; k < 3; k++) {
+    min[k] = Math.min(min[k], P[i * 3 + k]);
+    max[k] = Math.max(max[k], P[i * 3 + k]);
+  }
+  const c = [0, 1, 2].map((k) => (min[k] + max[k]) / 2);
+  const h = d.w / e.aspect;
+  const cr = Math.cos(deg2rad(-d.rot));
+  const sr = Math.sin(deg2rad(-d.rot));
+  const uvOf = (i) => {
+    const dx = P[i * 3] - c[0];
+    const dy = P[i * 3 + 1] - c[1];
+    const dz = P[i * 3 + 2] - c[2];
+    const a = dx * F.r[0] + dy * F.r[1] + dz * F.r[2] - d.x;
+    const b = dx * F.u[0] + dy * F.u[1] + dz * F.u[2] - d.y;
+    return [(a * cr - b * sr) / d.w + 0.5, (a * sr + b * cr) / h + 0.5];
+  };
+  const idx = g.index ? g.index.array : null;
+  const tris = idx ? idx.length / 3 : pos.count / 3;
+  const op = [];
+  const on = [];
+  const ou = [];
+  const vi = (t, k) => (idx ? idx[t * 3 + k] : t * 3 + k);
+  for (let t = 0; t < tris; t++) {
+    const v = [vi(t, 0), vi(t, 1), vi(t, 2)];
+    let dot = 0;
+    for (const i of v) dot += N[i * 3] * F.n[0] + N[i * 3 + 1] * F.n[1] + N[i * 3 + 2] * F.n[2];
+    if (dot / 3 < 0.3) continue;
+    const uv = v.map(uvOf);
+    if (uv.every((q) => q[0] < 0) || uv.every((q) => q[0] > 1) || uv.every((q) => q[1] < 0) || uv.every((q) => q[1] > 1)) continue;
+    for (let k = 0; k < 3; k++) {
+      const i = v[k];
+      op.push(pos.array[i * 3], pos.array[i * 3 + 1], pos.array[i * 3 + 2]);
+      on.push(nor.array[i * 3], nor.array[i * 3 + 1], nor.array[i * 3 + 2]);
+      ou.push(e.pad[0] + uv[k][0] * (1 - 2 * e.pad[0]), e.pad[1] + uv[k][1] * (1 - 2 * e.pad[1]));
+    }
+  }
+  if (!op.length) return null;
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.Float32BufferAttribute(op, 3));
+  out.setAttribute('normal', new THREE.Float32BufferAttribute(on, 3));
+  out.setAttribute('uv', new THREE.Float32BufferAttribute(ou, 2));
+  return out;
+}
+function clearDecals(r) {
+  for (const dm of r.decalMeshes || []) {
+    r.proxy.remove(dm.mesh);
+    dm.mesh.geometry.dispose();
+    dm.mesh.material.dispose();
+  }
+  r.decalMeshes = [];
+}
+function syncDecals(o, r) {
+  const list = o.decals || [];
+  const top = topOf(o.id);
+  const show = !o.neg && !(top && top.neg);
+  for (const dm of r.decalMeshes) dm.mesh.visible = show;
+  const key = r.key + JSON.stringify(o.scl) + JSON.stringify(list) + list.map((d) => (decalTexture(d.tex).ready ? decalTexture(d.tex).aspect : '-')).join();
+  if (key === r.decalKey) return;
+  r.decalKey = key;
+  clearDecals(r);
+  for (const d of list) {
+    const e = decalTexture(d.tex);
+    if (!e.ready) continue;
+    const g = buildDecalGeometry(o, r, d, e);
+    if (!g) continue;
+    const m = new THREE.MeshStandardMaterial({
+      map: e.tex, transparent: true, depthWrite: false, roughness: 0.5, metalness: 0,
+      polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
+    });
+    styleDecal(m, o);
+    const mesh = new THREE.Mesh(g, m);
+    mesh.renderOrder = 2;
+    mesh.receiveShadow = true;
+    mesh.visible = show;
+    mesh.userData.decal = true;
+    r.proxy.add(mesh);
+    r.decalMeshes.push({ mesh, decal: d });
+  }
+}
+/** The face of a part that looks most toward the camera (where a new decal goes). */
+function faceTowardCamera(o) {
+  const r = rt.get(o.id);
+  if (!r) return 'pz';
+  r.proxy.updateMatrixWorld(true);
+  const toCam = camera.position.clone().sub(r.proxy.getWorldPosition(new THREE.Vector3()));
+  toCam.applyQuaternion(r.proxy.getWorldQuaternion(new THREE.Quaternion()).invert()).normalize();
+  let best = 'pz';
+  let bd = -Infinity;
+  for (const [k, F] of Object.entries(DECAL_FACES)) {
+    const dot = toCam.x * F.n[0] + toCam.y * F.n[1] + toCam.z * F.n[2];
+    if (dot > bd) {
+      bd = dot;
+      best = k;
+    }
+  }
+  return best;
+}
+/** Width and height (m) of a part's face, for sizing decals. */
+function faceSize(o, face) {
+  const r = rt.get(o.id);
+  if (!r || !r.geo || !r.geo.attributes.position) return [1, 1];
+  const { P } = flatCoords(o, r.geo);
+  const F = DECAL_FACES[face];
+  let a0 = Infinity, a1 = -Infinity, b0 = Infinity, b1 = -Infinity;
+  for (let i = 0; i < P.length; i += 3) {
+    const a = P[i] * F.r[0] + P[i + 1] * F.r[1] + P[i + 2] * F.r[2];
+    const b = P[i] * F.u[0] + P[i + 1] * F.u[1] + P[i + 2] * F.u[2];
+    a0 = Math.min(a0, a);
+    a1 = Math.max(a1, a);
+    b0 = Math.min(b0, b);
+    b1 = Math.max(b1, b);
+  }
+  return [Math.max(0.05, a1 - a0), Math.max(0.05, b1 - b0)];
 }
 
 function worldMatrixOf(o) {
@@ -1444,7 +1951,7 @@ function setUnitMesh(u, geo, material) {
     return;
   }
   if (!u.mesh) {
-    u.mesh = new THREE.Mesh(geo, material);
+    u.mesh = tagModel(new THREE.Mesh(geo, material));
     u.mesh.frustumCulled = false;
     resultGroup.add(u.mesh);
   } else {
@@ -1774,6 +2281,7 @@ function gcAssets() {
   for (const n of state.nodes) {
     if (n.asset) used.add(n.asset);
     if (n.tex) used.add(n.tex);
+    for (const d of n.decals || []) used.add(d.tex);
   }
   for (const f of state.floors) if (f.tex) used.add(f.tex);
   for (const k of Object.keys(state.assets)) if (!used.has(k)) delete state.assets[k];
@@ -1925,8 +2433,10 @@ function removeNodes(ids) {
   for (const id of ids) for (const d of descendantIds(id)) all.add(d);
   for (const id of all) {
     disposeLight(id);
+    disposePartLight(id);
     const r = rt.get(id);
     if (r) {
+      clearDecals(r);
       partsGroup.remove(r.proxy);
       if (r.geo) r.geo.dispose();
       r.material.dispose();
@@ -2012,7 +2522,7 @@ function copySelection(cut = false) {
   for (const t of tops) for (const id of descendantIds(t.id)) nodes.push(JSON.parse(JSON.stringify(node(id))));
   const assets = {};
   for (const n of nodes) {
-    for (const k of [n.asset, n.tex]) if (k && state.assets[k]) assets[k] = state.assets[k];
+    for (const k of [n.asset, n.tex, ...(n.decals || []).map((d) => d.tex)]) if (k && state.assets[k]) assets[k] = state.assets[k];
   }
   writeClip({ kind: 'nodes', nodes, assets, cut });
   if (cut) {
@@ -2058,6 +2568,7 @@ function pasteClipboard() {
     const r = { ...raw, id: ids.get(raw.id), parent: ids.has(raw.parent) ? ids.get(raw.parent) : null };
     if (r.asset) r.asset = assetMap.get(r.asset) || r.asset;
     if (r.tex) r.tex = assetMap.get(r.tex) || r.tex;
+    if (Array.isArray(r.decals)) r.decals = r.decals.map((d) => ({ ...d, tex: assetMap.get(d.tex) || d.tex }));
     const n = r.kind === 'group' ? sanitizeGroup(r) : r.kind === 'light' ? sanitizeLight(r) : sanitizePart(r);
     if (!n) continue;
     if (n.kind !== 'group') n.pos = [round(n.pos[0] + off), n.pos[1], round(n.pos[2] + off)];
@@ -2547,12 +3058,60 @@ function lookHTML(leaves) {
       .join('');
   const anyTex = leaves.some((o) => o.tex);
   const size = (leaves.find((o) => o.tex) || first).texSize || 0.5;
+  const glowing = leaves.filter((o) => MATERIALS[o.mat] && MATERIALS[o.mat].emissive);
+  const glow = glowing.length ? glowing[0].glow ?? 1 : 1;
   return `<h2>Material${leaves.length > 1 ? ` <span class="sub">(all ${leaves.length} parts)</span>` : ''}</h2>
 <div class="matrow"><select id="f-mat" aria-label="Material">${matOptions}</select><input id="f-color" type="color" value="${first.color}" aria-label="Tint color"></div>
 <div class="field texrow"><span class="lbl">Texture</span>
   <div class="inline"><button type="button" data-act="tex">${anyTex ? 'Change image…' : 'Image…'}</button>${anyTex ? '<button type="button" data-act="tex-clear">Remove</button>' : ''}</div></div>
-${anyTex ? `<label class="sl"><span class="lb">Tile size</span><output id="out-texsize">${size.toFixed(2)}</output>
-<input type="range" data-texsize="1" min="0.05" max="4" step="0.05" value="${size}"></label>` : ''}`;
+${anyTex ? `<label class="sl"><span class="lb">Tile size (m)</span><output id="out-texsize">${size.toFixed(2)}</output>
+<input type="range" data-texsize="1" min="0.05" max="4" step="0.05" value="${size}"></label>` : ''}
+${glowing.length ? `<label class="sl"><span class="lb">Glow strength</span><output id="out-glow">${glow.toFixed(2)}</output>
+<input type="range" data-glow="1" min="0" max="4" step="0.05" value="${glow}"></label>` : ''}
+${glowing.length && anyTex ? '<p class="tip">Glowing + image = a lightbox: the image shines like a backlit print. Set the tint to white for its true colors.</p>' : ''}`;
+}
+
+function partLightHTML(o) {
+  const L = o.light;
+  const on = !!(L && L.on);
+  let h = `<h2>Light <span class="sub">(this object shines)</span></h2>
+<label class="chk"><input id="pl-on" type="checkbox" ${on ? 'checked' : ''}> Emit light${MATERIALS[o.mat].autoLight ? ' <span class="sub">(on by default for neon)</span>' : ''}</label>`;
+  if (!on) return h + '<p class="tip">For lamps, light panels and signs: the light comes out of this object and moves with it.</p>';
+  const sl = (key, label, min, max, step, dec) => `<label class="sl"><span class="lb">${label}</span><output id="out-pl-${key}">${Number(L[key]).toFixed(dec)}</output>
+<input type="range" data-pl="${key}" min="${min}" max="${max}" step="${step}" value="${L[key]}"></label>`;
+  h += `<div class="field"><div class="seg wide2">
+  <button type="button" data-pltype="spot" aria-pressed="${L.type === 'spot'}">Spot</button>
+  <button type="button" data-pltype="point" aria-pressed="${L.type === 'point'}">Point (glow out)</button></div></div>
+<div class="field"><span class="lbl">Color</span><div class="inline"><label class="chk"><input id="pl-match" type="checkbox" ${L.color ? '' : 'checked'}> Match object</label>
+<input id="pl-color" type="color" value="${L.color || partLightColor(o)}" aria-label="Light color" ${L.color ? '' : 'disabled'}></div></div>
+${sl('intensity', 'Brightness (candela)', 0, 500, 1, 0)}
+${sl('range', 'Range in meters (0 = no limit)', 0, 40, 0.5, 1)}`;
+  if (L.type === 'spot') {
+    h += `${sl('angle', 'Cone angle°', 5, 89, 1, 0)}${sl('penumbra', 'Edge softness', 0, 1, 0.05, 2)}
+<div class="field"><span class="lbl">Aim <span class="sub">(relative to the object)</span></span>
+<div class="aim">${[['down', 'Down'], ['up', 'Up'], ['front', 'Front'], ['back', 'Back'], ['left', 'Left'], ['right', 'Right']].map(([k, l]) => `<button type="button" data-plaim="${k}">${l}</button>`).join('')}</div></div>
+${sl('pitch', 'Tilt° (−90 down, 90 up)', -90, 90, 1, 0)}${sl('yaw', 'Turn°', -180, 180, 1, 0)}`;
+  }
+  h += `<label class="chk"><input id="pl-shadows" type="checkbox" ${L.shadows ? 'checked' : ''}> Casts shadows (in Godot)</label>
+<p class="tip">${L.type === 'spot' ? 'The spot sits just outside the side it points from, so the object never blocks it.' : 'The point light sits inside the object. Leave shadows off, or the object shades its own light in Godot.'} Exports as a ${L.type === 'spot' ? 'SpotLight3D' : 'OmniLight3D'} next to the mesh.</p>`;
+  return h;
+}
+
+function decalsHTML(o) {
+  const list = o.decals || [];
+  const rows = list
+    .map((d, i) => {
+      const [fw, fh] = faceSize(o, d.face);
+      const sl = (k, label, min, max, step, dec) => `<label class="sl"><span class="lb">${label}</span><output id="out-dc-${i}-${k}">${Number(d[k]).toFixed(dec)}</output>
+<input type="range" data-dc="${i}" data-dk="${k}" min="${round(min)}" max="${round(max)}" step="${step}" value="${d[k]}"></label>`;
+      const opts = Object.entries(DECAL_FACES).map(([k, F]) => `<option value="${k}" ${d.face === k ? 'selected' : ''}>${F.label}</option>`).join('');
+      return `<div class="decal"><div class="inline"><select data-dc="${i}" data-dk="face" aria-label="Face">${opts}</select><button type="button" data-dcdel="${i}">Remove</button></div>
+${sl('w', 'Width (m)', 0.02, Math.max(fw, fh) * 2, 0.01, 2)}${sl('x', 'Move ← → (m)', -fw / 2, fw / 2, 0.01, 2)}${sl('y', 'Move ↓ ↑ (m)', -fh / 2, fh / 2, 0.01, 2)}${sl('rot', 'Turn°', -180, 180, 1, 0)}</div>`;
+    })
+    .join('');
+  return `<h2>Decals <span class="sub">(an image on one face)</span></h2>${rows}
+<div class="inline"><button type="button" data-act="decal-add">${list.length ? 'Add another image…' : 'Image on a face…'}</button></div>
+<p class="tip">PNG, JPG or SVG (see-through parts stay see-through). It lands on the side facing you; change the side in its list. On curved walls it runs along the curve.</p>`;
 }
 
 /** Tag chips + add box. With several things selected, it shows the tags they share and adds to all. */
@@ -2606,7 +3165,7 @@ ${arrangeHTML()}
   }
   const n = node(sel[0]);
   if (n.kind === 'light') {
-    el.inspector.innerHTML = `<h2>${n.lightType === 'spot' ? 'Spot light' : 'Point light'}</h2>
+    el.inspector.innerHTML = `<h2>Light (Invis) <span class="sub">${n.lightType === 'spot' ? 'spot' : 'point'}, no visible object</span></h2>
 <div class="field"><input id="f-name" type="text" maxlength="60" value="${esc(n.name)}" aria-label="Name" spellcheck="false"></div>
 ${lightHTML(n)}
 <h2>Transform</h2>
@@ -2661,6 +3220,8 @@ ${sliders}${tip}
 <h2>Transform</h2>
 ${xformRow(n, 'Move', 'pos', 0.05)}${xformRow(n, 'Rotate°', 'rot', 5)}${xformRow(n, 'Scale', 'scl', 0.05)}
 ${lookHTML([n])}
+${decalsHTML(n)}
+${partLightHTML(n)}
 ${roundHTML(n)}
 ${tagsHTML([n])}
 ${arrangeHTML()}
@@ -2728,6 +3289,35 @@ el.inspector.addEventListener('input', (e) => {
     syncLight(n);
     return;
   }
+  if (n && n.kind === 'part' && n.light && (t.dataset.pl || t.id === 'pl-color')) {
+    if (t.id === 'pl-color') n.light.color = t.value;
+    else {
+      n.light[t.dataset.pl] = parseFloat(t.value);
+      const out = $(`#out-pl-${t.dataset.pl}`);
+      if (out) out.textContent = parseFloat(t.value).toFixed(Number(t.step) >= 1 ? 0 : Number(t.step) >= 0.1 ? 1 : 2);
+    }
+    delete n.light.auto;
+    syncPartLight(n);
+    return;
+  }
+  if (n && n.kind === 'part' && n.decals && t.dataset.dc && t.dataset.dk !== 'face') {
+    const d = n.decals[Number(t.dataset.dc)];
+    if (!d) return;
+    d[t.dataset.dk] = parseFloat(t.value);
+    const out = $(`#out-dc-${t.dataset.dc}-${t.dataset.dk}`);
+    if (out) out.textContent = d[t.dataset.dk].toFixed(t.dataset.dk === 'rot' ? 0 : 2);
+    syncDecals(n, ensureRT(n));
+    return;
+  }
+  if (t.dataset.glow && lookTargets().length) {
+    for (const o of lookTargets()) {
+      if (MATERIALS[o.mat].emissive) o.glow = parseFloat(t.value);
+      applyLook(o);
+    }
+    const out = $('#out-glow');
+    if (out) out.textContent = parseFloat(t.value).toFixed(2);
+    return;
+  }
   if (t.dataset.round && n) {
     const out = $(`#out-${t.dataset.round}`);
     if (out) out.textContent = parseFloat(t.value).toFixed(t.dataset.round === 'sand' ? 0 : 3);
@@ -2777,12 +3367,18 @@ el.inspector.addEventListener('change', (e) => {
     doReshape(t.value);
     return;
   }
+  if (t.dataset.glow) {
+    commit();
+    return;
+  }
   if (t.id === 'f-mat' && MATERIALS[t.value] && !view.floorMode) {
     for (const o of lookTargets()) {
       o.mat = t.value;
       o.color = MATERIALS[o.mat].color;
+      autoNeonLight(o);
       applyLook(o);
     }
+    renderInspector();
     const colorInput = $('#f-color');
     if (colorInput) colorInput.value = MATERIALS[t.value].color;
     commit();
@@ -2805,6 +3401,49 @@ el.inspector.addEventListener('change', (e) => {
     return;
   }
   if (t.id === 'f-tag') return;
+  {
+    const p = state.sel.length === 1 ? node(state.sel[0]) : null;
+    if (p && p.kind === 'part') {
+      if (t.id === 'pl-on') {
+        if (t.checked) p.light = p.light ? { ...p.light, on: true } : sanitizePartLight({ on: true });
+        else if (p.light) p.light.on = false;
+        if (p.light) delete p.light.auto;
+        syncPartLight(p);
+        commit();
+        renderInspector();
+        return;
+      }
+      if (t.id === 'pl-match' && p.light) {
+        p.light.color = t.checked ? null : partLightColor(p);
+        syncPartLight(p);
+        commit();
+        renderInspector();
+        return;
+      }
+      if (t.id === 'pl-shadows' && p.light) {
+        p.light.shadows = t.checked;
+        delete p.light.auto;
+        syncPartLight(p);
+        commit();
+        return;
+      }
+      if (t.dataset.pl || t.id === 'pl-color') {
+        commit();
+        return;
+      }
+      if (t.dataset.dc && p.decals) {
+        const d = p.decals[Number(t.dataset.dc)];
+        if (d && t.dataset.dk === 'face' && DECAL_FACES[t.value]) {
+          d.face = t.value;
+          d.x = d.y = 0;
+          syncDecals(p, ensureRT(p));
+          renderInspector();
+        }
+        commit();
+        return;
+      }
+    }
+  }
   if (t.dataset.caxis) {
     view.center[t.dataset.caxis] = t.checked;
     return;
@@ -2848,8 +3487,10 @@ el.inspector.addEventListener('change', (e) => {
     commit();
   } else if (t.id === 'f-mat' && MATERIALS[t.value]) {
     for (const o of leavesOf(n.id)) {
+      if (o.kind !== 'part') continue;
       o.mat = t.value;
       o.color = MATERIALS[o.mat].color;
+      autoNeonLight(o);
       applyLook(o);
     }
     const colorInput = $('#f-color');
@@ -2886,6 +3527,28 @@ el.inspector.addEventListener('click', (e) => {
       if (next.length) n.tags = next;
       else delete n.tags;
     }
+    commit();
+    renderInspector();
+    return;
+  }
+  const pt = e.target.closest('[data-pltype], [data-plaim], [data-dcdel]');
+  if (pt) {
+    const p = node(state.sel[0]);
+    if (!p || p.kind !== 'part') return;
+    if (pt.dataset.pltype && p.light) {
+      if (p.light.type !== pt.dataset.pltype) p.light.shadows = pt.dataset.pltype === 'spot'; // a point inside its object would shade itself
+      p.light.type = pt.dataset.pltype;
+      delete p.light.auto;
+    } else if (pt.dataset.plaim && p.light) {
+      const AIM = { down: [-90, 0], up: [90, 0], front: [0, 180], back: [0, 0], left: [0, -90], right: [0, 90] };
+      [p.light.pitch, p.light.yaw] = AIM[pt.dataset.plaim];
+      delete p.light.auto;
+    } else if (pt.dataset.dcdel && p.decals) {
+      p.decals.splice(Number(pt.dataset.dcdel), 1);
+      if (!p.decals.length) delete p.decals;
+      syncDecals(p, ensureRT(p));
+    }
+    syncPartLight(p);
     commit();
     renderInspector();
     return;
@@ -2959,6 +3622,13 @@ function runAction(a) {
     }
   } else if (a === 'svg') el.fileSvg.click();
   else if (a === 'tex') el.fileTex.click();
+  else if (a === 'decal-add') {
+    const p = state.sel.length === 1 ? node(state.sel[0]) : null;
+    if (p && p.kind === 'part') {
+      decalTarget = p.id;
+      el.fileTex.click();
+    }
+  }
   else if (a === 'tag') addTagFromInput();
   else if (a === 'copy') copySelection(false);
   else if (a === 'cut') copySelection(true);
@@ -3398,18 +4068,27 @@ function loadSkyTexture(url) {
 }
 
 /** Downscale big panoramas so they fit in storage and VRAM. */
+/**
+ * Read an image file into a data URL no bigger than maxW. Vector (SVG) files are drawn at
+ * full size so they stay crisp; PNG/GIF/WebP/SVG keep their transparency (stickers need it).
+ */
 function shrinkImage(file, maxW = 2048) {
+  const vector = /svg/i.test(file.type) || /\.svg$/i.test(file.name || '');
+  const alpha = vector || /png|gif|webp/i.test(file.type);
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
-      const k = Math.min(1, maxW / img.width);
+      let w = img.naturalWidth || img.width;
+      let h = img.naturalHeight || img.height;
+      if (!w || !h) w = h = maxW;
+      const k = vector ? maxW / Math.max(w, h) : Math.min(1, maxW / Math.max(w, h));
       const c = document.createElement('canvas');
-      c.width = Math.max(1, Math.round(img.width * k));
-      c.height = Math.max(1, Math.round(img.height * k));
+      c.width = Math.max(1, Math.round(w * k));
+      c.height = Math.max(1, Math.round(h * k));
       c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
       URL.revokeObjectURL(url);
-      resolve(c.toDataURL('image/jpeg', 0.88));
+      resolve(alpha ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', 0.88));
     };
     img.onerror = () => {
       URL.revokeObjectURL(url);
@@ -3418,6 +4097,77 @@ function shrinkImage(file, maxW = 2048) {
     img.src = url;
   });
 }
+
+/* ---- Look panel: viewport shading, every effect its own toggle + settings ---- */
+
+const FX_UI = [
+  ['ao', 'Ambient occlusion', 'Soft shade where walls meet floors, in corners and creases.', [
+    ['radius', 'Radius (m)', 0.05, 3, 0.05, 2], ['strength', 'Strength', 0, 1.5, 0.05, 2], ['falloff', 'Falloff', 0.5, 3, 0.1, 1]]],
+  ['shadows', 'Sun shadows', 'Real shadows from the sun (L to move it).', [
+    ['quality', 'Quality', 'select'], ['softness', 'Edge softness', 0, 10, 0.5, 1], ['darkness', 'Darkness', 0, 1, 0.05, 2], ['lamps', 'Lights cast shadows too (slower)', 'check']]],
+  ['bloom', 'Glow bloom', 'A halo around neon and glow, and the brightest highlights.', [
+    ['strength', 'Strength', 0, 3, 0.05, 2], ['radius', 'Spread', 0, 1, 0.05, 2], ['threshold', 'Only above brightness', 0.2, 3, 0.05, 2]]],
+  ['outline', 'Edge outlines', 'Thin lines on silhouettes and sharp creases.', [
+    ['width', 'Thickness (px)', 0.5, 4, 0.25, 2], ['darkness', 'Darkness', 0, 1, 0.05, 2], ['color', 'Line color', 'color']]],
+  ['clay', 'Clay mode', 'Everything one matte color, so you only see form, depth and shadow.', [
+    ['color', 'Clay color', 'color'], ['glow', 'Glow still shows', 'check']]],
+];
+const fxPanel = $('#fx-panel');
+const fxBtn = $('#btn-fx');
+function fxHTML() {
+  const f = view.fx;
+  return (
+    FX_UI.map(([g, label, tip, ctrls]) => {
+      const S = f[g];
+      const body = ctrls
+        .map(([k, l, a, b, step, dec]) => {
+          const path = `${g}.${k}`;
+          if (a === 'check') return `<label class="chk sub2"><input type="checkbox" data-fx="${path}" ${S[k] ? 'checked' : ''}> ${l}</label>`;
+          if (a === 'color') return `<div class="field"><span class="lbl">${l}</span><input type="color" data-fx="${path}" value="${S[k]}" aria-label="${l}"></div>`;
+          if (a === 'select') return `<div class="field"><span class="lbl">${l}</span><select data-fx="${path}" aria-label="${l}">${[[1024, 'Low (1024)'], [2048, 'Medium (2048)'], [4096, 'High (4096)']].map(([v, t]) => `<option value="${v}" ${S[k] === v ? 'selected' : ''}>${t}</option>`).join('')}</select></div>`;
+          return `<label class="sl"><span class="lb">${l}</span><output id="out-fx-${g}-${k}">${Number(S[k]).toFixed(dec)}</output>
+<input type="range" data-fx="${path}" min="${a}" max="${b}" step="${step}" value="${S[k]}"></label>`;
+        })
+        .join('');
+      return `<div class="fxsec"><label class="chk fxh"><input type="checkbox" data-fx="${g}.on" ${S.on ? 'checked' : ''}> <b>${label}</b></label>${S.on ? body : `<p class="tip">${tip}</p>`}</div>`;
+    }).join('') +
+    `<div class="inline"><button type="button" data-fxreset="1">Reset all</button></div>
+<p class="tip">Viewport only, saved in this browser. Godot does its own lighting when it imports the room.</p>`
+  );
+}
+function applyFx(rerender) {
+  view.fx = fx.set(view.fx);
+  saveFx();
+  // shadows from lights depend on these settings
+  for (const o of state.nodes) {
+    if (o.kind === 'light') syncLight(o);
+    else if (o.kind === 'part' && o.light) syncPartLight(o);
+  }
+  if (rerender) fxPanel.innerHTML = fxHTML();
+}
+function toggleFxPanel(open) {
+  const show = open ?? fxPanel.hidden;
+  if (show) fxPanel.innerHTML = fxHTML();
+  fxPanel.hidden = !show;
+  fxBtn.setAttribute('aria-expanded', String(show));
+}
+fxBtn.addEventListener('click', () => toggleFxPanel());
+fxPanel.addEventListener('input', (e) => {
+  const t = e.target;
+  if (!t.dataset.fx) return;
+  const [g, k] = t.dataset.fx.split('.');
+  if (t.type === 'checkbox') view.fx[g][k] = t.checked;
+  else if (t.type === 'range' || t.tagName === 'SELECT') view.fx[g][k] = Number(t.value);
+  else view.fx[g][k] = t.value;
+  const out = $(`#out-fx-${g}-${k}`);
+  if (out) out.textContent = Number(t.value).toFixed(Number(t.step) >= 1 ? 0 : Number(t.step) >= 0.1 ? 1 : 2);
+  applyFx(t.type === 'checkbox' && k === 'on');
+});
+fxPanel.addEventListener('click', (e) => {
+  if (!e.target.closest('[data-fxreset]')) return;
+  view.fx = sanitizeFx(null);
+  applyFx(true);
+});
 
 const skyPanel = $('#sky-panel');
 const skyBtn = $('#btn-sky');
@@ -3897,8 +4647,7 @@ function menuItems() {
       { sep: true },
       { label: 'Paste', key: 'Ctrl+V', act: 'paste', disabled: !readClip() },
       { sep: true },
-      { label: 'Add point light', act: 'light:point' },
-      { label: 'Add spot light', act: 'light:spot' },
+      { label: 'Add Light (Invis)', act: 'light:spot' },
       { label: 'Import SVG…', act: 'svg' },
       { label: 'Select all', act: 'all', disabled: !state.nodes.length },
     ];
@@ -4245,9 +4994,34 @@ el.fileOpen.addEventListener('change', async () => {
 });
 $('#btn-svg').addEventListener('click', () => el.fileSvg.click());
 let floorTexTarget = null;
+let decalTarget = null;
+/** Put an image file on the face of a part that looks toward the camera. */
+async function addDecalFromFile(o, file) {
+  const url = await shrinkImage(file, 1024);
+  const id = `img${state.nextId++}`;
+  state.assets[id] = url;
+  const face = faceTowardCamera(o);
+  const [fw, fh] = faceSize(o, face);
+  o.decals = sanitizeDecals([...(o.decals || []), { tex: id, face, x: 0, y: 0, w: round(Math.min(fw, fh) * 0.6) }]);
+  syncDecals(o, ensureRT(o));
+  commit();
+  renderInspector();
+  toast(`Image placed on the ${DECAL_FACES[face].label.split(' ')[0].toLowerCase()} face. Resize and move it in the inspector.`);
+}
 el.fileTex.addEventListener('change', async () => {
   const file = el.fileTex.files && el.fileTex.files[0];
   el.fileTex.value = '';
+  if (decalTarget != null) {
+    const o = node(decalTarget);
+    decalTarget = null;
+    if (!file || !o) return;
+    try {
+      await addDecalFromFile(o, file);
+    } catch (err) {
+      toast('Could not load that image: ' + err.message);
+    }
+    return;
+  }
   if (floorTexTarget != null) {
     const fl = floorById(floorTexTarget);
     floorTexTarget = null;
@@ -4314,6 +5088,7 @@ async function exportRoom() {
   const r3 = (v) => [round(v.x), round(v.y), round(v.z)];
   const entries = [];
   const lights = [];
+  const exported = [];
 
   // Groups (folders) export as empty parent nodes so the hierarchy survives into Godot
   const folderNodes = new Map();
@@ -4355,7 +5130,10 @@ async function exportRoom() {
     } else if (n.kind === 'part') {
       const r = rt.get(n.id);
       if (r && r.geo && r.geo.attributes.position && r.geo.attributes.position.count) {
-        mesh = new THREE.Mesh(r.geo, strip ? plain() : r.material);
+        const g = r.geo.clone();
+        g.deleteAttribute('flat'); // editor-only helpers for curved walls
+        g.deleteAttribute('flatN');
+        mesh = new THREE.Mesh(g, strip ? plain() : r.material);
         mesh.position.copy(r.proxy.position);
         mesh.quaternion.copy(r.proxy.quaternion);
         mesh.scale.copy(r.proxy.scale);
@@ -4368,6 +5146,7 @@ async function exportRoom() {
     mesh.name = base + (collide ? '-col' : '');
     mesh.userData = { meshtype: { id: n.id, kind: isGroup(n) ? 'union' : 'part', tags } };
     parentFor(n).add(mesh);
+    exported.push({ id: n.id, base, mesh, parent: parentFor(n) });
     mesh.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(mesh);
     const leaves = leavesOf(n.id);
@@ -4387,6 +5166,66 @@ async function exportRoom() {
       material: leaves.length ? { preset: leaves[0].mat, color: leaves[0].color } : null,
       rounded: !!n.round,
     });
+  }
+
+  // each exported shape's stickers (decals) and built-in lights go right next to it
+  for (const info of exported) {
+    let k = 0;
+    for (const o of leavesOf(info.id)) {
+      if (o.kind !== 'part') continue;
+      const r = rt.get(o.id);
+      if (!r) continue;
+      r.proxy.updateMatrixWorld(true);
+      if (!strip) {
+        for (const dm of r.decalMeshes) {
+          if (!dm.mesh.visible) continue;
+          const m = new THREE.Mesh(dm.mesh.geometry, dm.mesh.material);
+          r.proxy.matrixWorld.decompose(m.position, m.quaternion, m.scale);
+          m.name = uniqueName(`${info.base}-decal${++k}`);
+          m.userData = { meshtype: { id: o.id, kind: 'decal', of: info.base } };
+          info.parent.add(m);
+        }
+      }
+      if (!partLightOn(o)) continue;
+      const pose = partLightPose(o);
+      if (!pose) continue;
+      const L = o.light;
+      const col = partLightColor(o);
+      const Lt =
+        L.type === 'spot'
+          ? new THREE.SpotLight(col, L.intensity, L.range, deg2rad(L.angle), L.penumbra, 2)
+          : new THREE.PointLight(col, L.intensity, L.range, 2);
+      Lt.position.copy(pose.pos);
+      Lt.name = uniqueName(`${info.base}-light`);
+      if (L.type === 'spot') {
+        Lt.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), pose.dir);
+        const t = new THREE.Object3D();
+        t.position.set(0, 0, -1);
+        t.name = `${Lt.name}-aim`;
+        Lt.add(t);
+        Lt.target = t;
+      }
+      Lt.userData = { meshtype: { id: o.id, kind: 'light', of: info.base, tags: o.tags || [], shadows: L.shadows } };
+      info.parent.add(Lt);
+      lights.push({
+        node: Lt.name,
+        godotName: Lt.name,
+        type: L.type,
+        godotType: L.type === 'spot' ? 'SpotLight3D' : 'OmniLight3D',
+        id: o.id,
+        name: `${o.name} light`,
+        attachedTo: info.base,
+        tags: o.tags || [],
+        color: col,
+        intensityCandela: L.intensity,
+        range: L.range,
+        spotAngleDeg: L.type === 'spot' ? L.angle : null,
+        penumbra: L.type === 'spot' ? L.penumbra : null,
+        castShadows: L.shadows,
+        position: r3(pose.pos),
+        direction: L.type === 'spot' ? r3(pose.dir) : null,
+      });
+    }
   }
 
   for (const n of state.nodes) {
@@ -4493,6 +5332,8 @@ async function exportRoom() {
       'With collisionSuffix set, Godot strips "-col" from the name on import and adds a StaticBody3D with trimesh collision; the node is then called "godotName".',
       'Tags are also stored on each node as glTF extras (meshtype.tags).',
       'Lights are in the GLB as KHR_lights_punctual (point/spot, intensity in candela).',
+      'A light built into a shape is named "<shape>-light" and lists the shape in "attachedTo"; parent it to that mesh in Godot if it should move with it.',
+      'Decals (images on a face) are separate meshes named "<shape>-decalN" with no collision.',
     ],
   };
   return { grp, manifest };
@@ -4537,6 +5378,7 @@ function resize() {
   const w = Math.max(1, Math.floor(rect.width));
   const h = Math.max(1, Math.floor(rect.height));
   renderer.setSize(w, h, false);
+  fx.setSize(w, h);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
 }
@@ -4893,8 +5735,58 @@ function setViewDir(dir) {
   viewTween.on = true;
 }
 
+/* axis tripod beside the view cube: X red, Y green (up), Z blue, same colors as Godot */
+const vcAxes = $('#vc-axes');
+const AXES = [
+  ['X', new THREE.Vector3(1, 0, 0), '#e0443e'],
+  ['Y', new THREE.Vector3(0, 1, 0), '#3fb54a'],
+  ['Z', new THREE.Vector3(0, 0, 1), '#2f80e8'],
+];
+const axisEls = AXES.map(([name, , color]) => {
+  const ns = 'http://www.w3.org/2000/svg';
+  const g = document.createElementNS(ns, 'g');
+  const neg = document.createElementNS(ns, 'circle');
+  neg.setAttribute('r', '2.6');
+  neg.setAttribute('fill', 'none');
+  neg.setAttribute('stroke', color);
+  neg.setAttribute('stroke-width', '1.2');
+  neg.setAttribute('opacity', '0.55');
+  const line = document.createElementNS(ns, 'line');
+  line.setAttribute('stroke', color);
+  line.setAttribute('stroke-width', '2.4');
+  line.setAttribute('stroke-linecap', 'round');
+  const label = document.createElementNS(ns, 'text');
+  label.textContent = name;
+  label.setAttribute('fill', color);
+  label.setAttribute('text-anchor', 'middle');
+  label.setAttribute('dominant-baseline', 'central');
+  g.append(neg, line, label);
+  vcAxes.appendChild(g);
+  return { g, neg, line, label };
+});
+function updateAxes(qInv) {
+  const order = AXES.map(([, v], i) => {
+    const p = v.clone().applyQuaternion(qInv);
+    return { i, x: p.x * 20, y: -p.y * 20, z: p.z };
+  }).sort((a, b) => a.z - b.z);
+  for (const o of order) {
+    const e = axisEls[o.i];
+    e.line.setAttribute('x1', '0');
+    e.line.setAttribute('y1', '0');
+    e.line.setAttribute('x2', o.x.toFixed(2));
+    e.line.setAttribute('y2', o.y.toFixed(2));
+    e.label.setAttribute('x', (o.x * 1.32).toFixed(2));
+    e.label.setAttribute('y', (o.y * 1.32).toFixed(2));
+    e.neg.setAttribute('cx', (-o.x).toFixed(2));
+    e.neg.setAttribute('cy', (-o.y).toFixed(2));
+    e.g.setAttribute('opacity', o.z < -0.3 ? '0.55' : '1');
+    vcAxes.appendChild(e.g); // back to front
+  }
+}
+
 function updateViewCube() {
   const q = camera.quaternion.clone().invert();
+  updateAxes(q);
   const e = new THREE.Matrix4().makeRotationFromQuaternion(q).elements;
   const a = (r, c) => e[c * 4 + r] * ((r === 1) !== (c === 1) ? -1 : 1); // flip Y for CSS
   vcCube.style.transform = `matrix3d(${a(0, 0)},${a(1, 0)},${a(2, 0)},0,${a(0, 1)},${a(1, 1)},${a(2, 1)},0,${a(0, 2)},${a(1, 2)},${a(2, 2)},0,0,0,0,1)`;
@@ -4972,7 +5864,21 @@ function loop() {
   if (planeDirty) updateAlignPlane();
   orbit.update();
   eyeStep();
-  renderer.render(scene, camera);
+  updatePartLights();
+  fitSunShadow(now);
+  renderView();
+}
+
+/** The meshes clay mode repaints: shown parts, baked shapes, floors. */
+function modelMeshes() {
+  const out = [];
+  for (const r of rt.values()) out.push(r.part);
+  for (const u of units.values()) if (u.mesh) out.push(u.mesh);
+  for (const r of frt.values()) out.push(r.mesh);
+  return out;
+}
+function renderView() {
+  fx.render(view.fx.clay.on ? modelMeshes() : []);
 }
 
 /* PWA */
@@ -5024,7 +5930,7 @@ boot();
 // test / automation hooks (only with ?test or ?cli in the URL)
 const AUTOMATION = /[?&](test|cli)\b/.test(location.search);
 if (AUTOMATION) {
-  window.__mt = { transform, pivot, rt, lrt, sbox, camera, units, getState: () => state, getTarget: () => orbit.target.toArray() };
+  window.__mt = { transform, pivot, rt, lrt, plt, fx, sbox, camera, units, exportRoom, getState: () => state, getTarget: () => orbit.target.toArray() };
   window.__mt.cli = {
     /** Load a project, solve every boolean and wait for rounding to finish. */
     async load(raw) {

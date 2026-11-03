@@ -28,8 +28,12 @@ export const MATERIALS = {
   },
   frosted: {
     label: 'Frosted glass',
-    color: '#e6f6ff',
-    props: { roughness: 0.5, transmission: 0.85, thickness: 0.6, ior: 1.4, attenuationDistance: 3 },
+    color: '#eef8ff',
+    // rough transmission blurs whatever is behind it; the thin clearcoat keeps a glossy skin on top
+    props: {
+      roughness: 0.62, transmission: 1, thickness: 0.8, ior: 1.45, attenuationDistance: 4,
+      clearcoat: 0.6, clearcoatRoughness: 0.1, envMapIntensity: 1.1,
+    },
   },
   chrome: {
     label: 'Chrome',
@@ -59,7 +63,9 @@ export const MATERIALS = {
   wood: { label: 'Wood (color)', color: '#9a6b43', godot: true, props: { roughness: 0.65 } },
   acrylic: { label: 'Clear acrylic', color: '#d8f2ff', godot: true, props: { roughness: 0.05, transparent: true, opacity: 0.3, depthWrite: false } },
   tinted: { label: 'Tinted glass (Godot)', color: '#5ab8e8', godot: true, props: { roughness: 0.04, metalness: 0.1, transparent: true, opacity: 0.45, depthWrite: false } },
-  neon: { label: 'Neon', color: '#39c6ff', emissive: true, godot: true, props: { roughness: 0.2, emissiveIntensity: 4 } },
+  frost: { label: 'Frosted glass (Godot)', color: '#e8f4fb', godot: true, props: { roughness: 0.75, transparent: true, opacity: 0.62, depthWrite: false } },
+  // Neon glows, lights the room (its object light turns on by itself) and backlights an image texture
+  neon: { label: 'Neon', color: '#39c6ff', emissive: true, autoLight: true, godot: true, props: { roughness: 0.2, emissiveIntensity: 4 } },
 };
 
 for (const k of ['matte', 'chrome']) if (MATERIALS[k]) MATERIALS[k].godot = true;

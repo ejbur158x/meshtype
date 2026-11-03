@@ -31,7 +31,7 @@ Several files at once: `node tools/meshtype.mjs build rooms/*.meshtype.json --ou
 - **Doorways**: cutters 1.2 m wide × 2.4 m tall, centered on a whole-meter mark of the wall, cutting all the way through (cutter thickness ≥ wall + 0.2). Tag the union `door` (plus `keycard`, `locked`, ... as needed).
 - **Hallways**: tag the room `hall`; curved halls use `bend` on the walls (inner and outer wall share the same angle and center).
 - **Names**: unique and readable (`Wall North`, `Door East`), because they become the Godot node names.
-- **Lights**: at least one per room, inside the walls, below the ceiling.
+- **Lights**: at least one per room, inside the walls, below the ceiling. Prefer a lamp part with a built-in `light` (spot aimed down) over a floating light, so the fixture and its light move together. Neon (`mat: "neon"`) needs its `light` set explicitly in JSON (the editor only adds it automatically when you pick neon by hand).
 - **Keep it light**: plain boxes for structure; squircles, rounding and glass for things people look at. Rounding is dense, so use it on props, not on walls.
 
 ## In Godot

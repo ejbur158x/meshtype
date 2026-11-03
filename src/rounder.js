@@ -511,9 +511,10 @@ export function boxUVs(pos, nor) {
   const uv = new Float32Array((pos.length / 3) * 2);
   for (let i = 0, j = 0; i < pos.length; i += 3, j += 2) {
     const ax = Math.abs(nor[i]), ay = Math.abs(nor[i + 1]), az = Math.abs(nor[i + 2]);
-    if (ax >= ay && ax >= az) { uv[j] = pos[i + 2] * Math.sign(nor[i] || 1); uv[j + 1] = pos[i + 1]; }
+    // seen from outside each face the image reads the right way round (not mirrored)
+    if (ax >= ay && ax >= az) { uv[j] = -pos[i + 2] * Math.sign(nor[i] || 1); uv[j + 1] = pos[i + 1]; }
     else if (ay >= az) { uv[j] = pos[i]; uv[j + 1] = pos[i + 2] * -Math.sign(nor[i + 1] || 1); }
-    else { uv[j] = pos[i] * -Math.sign(nor[i + 2] || 1); uv[j + 1] = pos[i + 1]; }
+    else { uv[j] = pos[i] * Math.sign(nor[i + 2] || 1); uv[j + 1] = pos[i + 1]; }
   }
   return uv;
 }
