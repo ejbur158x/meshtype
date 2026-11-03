@@ -42,15 +42,16 @@ await page.keyboard.press('Control+v'); await page.waitForTimeout(400);
 s = await st();
 ok('pastes into another project after reload', s.nodes.filter((n) => n.kind === 'group').length === 1 && s.nodes.length === 3, JSON.stringify(s.nodes.map((n) => n.name)));
 // sharp box + wall presets
-await page.click('[data-add="box"]'); await page.click('[data-add="wall"]'); await page.waitForTimeout(400);
+const addWall = async () => { await page.click('[data-add="box"]'); await page.waitForTimeout(300); for (const [t, i, v] of [['scl', 0, 4], ['scl', 1, 3], ['scl', 2, 0.2], ['pos', 1, 1.5]]) await page.$eval(`input[data-t="${t}"][data-i="${i}"]`, (e, v) => { e.value = String(v); e.dispatchEvent(new Event('change', { bubbles: true })); }, v); await page.waitForTimeout(200); };
+await page.click('[data-add="box"]'); await addWall(); await page.waitForTimeout(400);
 s = await st();
 const bx = s.nodes.filter((n) => n.type === 'box');
 ok('box + wall added, sitting on the floor', bx.length === 2 && bx[0].pos[1] === 0.5 && bx[1].pos[1] === 1.5 && bx[1].scl.join() === '4,3,0.2', JSON.stringify(bx.map((b) => [b.pos, b.scl])));
 const tris = await page.evaluate((id) => { const g = __mt.rt.get(id).geo; return g.index.count / 3; }, bx[0].id);
 ok('box is 12 triangles', tris === 12, String(tris));
 // union two boxes (CSG on sharp boxes)
-await page.locator('#list li', { hasText: 'Box' }).first().click();
-await page.locator('#list li', { hasText: 'Wall' }).first().click({ modifiers: ['Shift'] });
+await page.locator('#list li', { hasText: 'Box' }).nth(0).click();
+await page.locator('#list li', { hasText: 'Box' }).nth(1).click({ modifiers: ['Shift'] });
 await page.click('#btn-union'); await page.waitForTimeout(600);
 ok('boxes union cleanly', /tris/.test(await page.textContent('#stats')) && (await st()).nodes.some((n) => n.kind === 'group' && n.name.startsWith('Union')));
 console.log('ERRORS:', errs.join('\n') || 'none');

@@ -97,7 +97,7 @@ ok('export has lamp light attached', ex.lights.some(([n, a]) => /lamp-light/.tes
 
 // Look panel
 await page.click('#btn-fx');
-ok('look panel opens with 5 sections', (await page.locator('#fx-panel .fxsec').count()) === 5);
+ok('look panel opens with camera + 6 effect sections', (await page.locator('#fx-panel .fxsec').count()) === 7);
 await page.check('[data-fx="outline.on"]');
 await page.check('[data-fx="clay.on"]');
 await page.waitForTimeout(200);

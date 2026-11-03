@@ -9,7 +9,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<link rel="stylesheet" href="style.css?v=0.8.0">
+<link rel="stylesheet" href="style.css?v=0.8.1">
 <script type="importmap">
 {
   "imports": {
@@ -72,7 +72,7 @@
   <header class="titlebar">
     <span class="logo" aria-hidden="true"></span>
     <span class="word">Meshtype</span>
-    <span class="ver">v0.8.0</span>
+    <span class="ver">v0.8.1</span>
     <input id="project-name" class="proj" type="text" value="untitled" maxlength="60" aria-label="Project name" spellcheck="false">
     <span class="spacer"></span>
     <button id="btn-install" type="button" hidden title="Install Meshtype as an app">Install app</button>
@@ -112,15 +112,16 @@
     <aside class="panel left" aria-label="Shapes and parts">
       <h2>Add shape</h2>
       <div class="adds">
-        <button type="button" data-add="box" title="Sharp box, 12 triangles">Box</button>
-        <button type="button" data-add="wall" title="Sharp wall slab, 4 × 3 × 0.2 m, sitting on the floor">Wall</button>
+        <button type="button" data-add="box" title="Sharp box, 12 triangles. Stretch it into walls, floors, ceilings">Box</button>
+        <button type="button" data-add="cylinder" title="Sharp cylinder, no rounded edges">Cylinder</button>
+        <button type="button" data-add="arch" title="Archway: square bottom, rounded top. Make it a Cutter and UNION it with a wall for a hallway opening">Arch</button>
         <button type="button" data-add="block">Block</button>
         <button type="button" data-add="panel">Panel</button>
         <button type="button" data-add="disc">Disc</button>
         <button type="button" data-add="orb">Orb</button>
         <button type="button" data-add="pill">Pill</button>
         <button id="btn-svg" type="button" title="Import an SVG file and extrude it">SVG</button>
-        <button type="button" data-add-light="spot" title="A light with no visible object: spot or point, set in the inspector. To make an object itself shine, use Light in its own settings."><svg class="bico" aria-hidden="true"><use href="#i-light"/></svg>Light (Invis)</button>
+        <button type="button" data-add-light="spot" class="span3" title="A light with no visible object: spot or point, set in the inspector. To make an object itself shine, use Light in its own settings."><svg class="bico" aria-hidden="true"><use href="#i-light"/></svg>Light (Invis)</button>
       </div>
 
       <h2>Combine</h2>
@@ -173,6 +174,7 @@
         <label class="chk"><input id="chk-cages" type="checkbox"> Cages</label>
         <button id="btn-sun" type="button" aria-pressed="false" title="Edit the sun: drag it to light the scene (L)">☀ Sun</button>
         <button id="btn-sky" type="button" aria-expanded="false" aria-controls="sky-panel" title="Sky background">Sky ▾</button>
+        <button id="btn-xray" type="button" aria-pressed="false" title="X-ray: see through everything to line things up (Z). Settings in Look ▾">X-ray</button>
         <button id="btn-fx" type="button" aria-expanded="false" aria-controls="fx-panel" title="Viewport looks: shadows, ambient occlusion, glow, outlines, clay">Look ▾</button>
       </div>
       <div id="fx-panel" class="skypanel fxpanel" hidden></div>
@@ -180,6 +182,7 @@
         <div class="field"><span class="lbl">Background</span>
           <div class="seg wide2">
             <button type="button" data-sky="aero" aria-pressed="true">Aero</button>
+            <button type="button" data-sky="clear" aria-pressed="false" title="Deep blue sky, wispy clouds, calm ocean below: cooler, neutral reflections">Clear sky</button>
             <button type="button" data-sky="color" aria-pressed="false">Color</button>
             <button type="button" data-sky="image" aria-pressed="false">Image</button>
           </div></div>
@@ -193,6 +196,8 @@
             <button type="button" class="sw" data-swatch="#000000" style="background:#000" aria-label="Black"></button>
             <input id="sky-color" type="color" value="#bfe9ff" aria-label="Custom sky color">
           </div></div>
+        <div class="field"><span class="lbl">Reflections with a solid color</span>
+          <div class="seg wide2"><button type="button" data-skyref="clear" aria-pressed="true">Clear sky</button><button type="button" data-skyref="aero" aria-pressed="false">Aero</button></div></div>
         <div class="field"><span class="lbl">Desktop wallpaper <span class="sub">(behind the window)</span></span>
           <div class="inline"><button type="button" id="btn-wall">Upload…</button><button type="button" id="btn-wall-reset">Default</button></div></div>
         <div class="field"><span class="lbl">Skybox image <span class="sub">(equirectangular panorama)</span></span>
@@ -208,7 +213,11 @@
       <div class="vc-btns">
         <button id="btn-iso" type="button" aria-pressed="false" title="Perspective / isometric (almost no perspective)">PERSP</button>
         <button id="btn-pivot" type="button" aria-pressed="false" title="The camera orbits a point; F moves it onto the selection. Click: turn around yourself instead">ORBIT</button>
+        <button id="btn-spawn" type="button" class="pegman" aria-pressed="false" title="Spawn point: click me, then click the floor where the player starts. Walk mode starts there."><svg viewBox="0 0 20 28" aria-hidden="true"><circle cx="10" cy="5" r="4.2"/><path d="M4 11.5c0-1.6 1.3-2.8 2.8-2.8h6.4c1.6 0 2.8 1.3 2.8 2.8V18c0 .8-.6 1.4-1.4 1.4h-.9V26a1.3 1.3 0 0 1-1.3 1.3H7.6A1.3 1.3 0 0 1 6.3 26v-6.6h-.9C4.6 19.4 4 18.8 4 18z"/></svg></button>
+        <button id="btn-walk" type="button" title="Walk the room from the spawn point (P). Esc stops.">WALK</button>
       </div>
+      <div id="walk-hud" class="walkhud" hidden></div>
+      <div class="crosshair" aria-hidden="true"></div>
       <svg id="vc-axes" class="vc-axes" viewBox="-32 -32 64 64" aria-label="World axes: X red, Y green (up), Z blue"></svg>
       <div id="vcube" class="vcube" aria-label="View selector. Click a face or drag to orbit.">
         <div class="vc-cube" id="vc-cube">
@@ -242,6 +251,6 @@
   <option value="trigger"><option value="alarm"><option value="camera"><option value="switch"><option value="prop"><option value="no-collide">
 </datalist>
 
-<script type="module" src="src/main.js?v=0.8.0"></script>
+<script type="module" src="src/main.js?v=0.8.1"></script>
 </body>
 </html>

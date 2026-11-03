@@ -11,7 +11,8 @@ const ok = (n, c, x = '') => { console.log(c ? 'PASS' : 'FAIL', n, x); if (!c) f
 await page.goto('http://localhost:8123/?test');
 await page.evaluate(() => { localStorage.clear(); localStorage.setItem('meshtype.autosave', JSON.stringify({ app: 'meshtype', name: 'hall', nextId: 1, nodes: [], assets: {}, floor: { grid: 0.5, show: true }, floors: [] })); });
 await page.reload(); await page.waitForTimeout(1200);
-await page.click('[data-add="wall"]'); await page.waitForTimeout(300);
+const addWall = async () => { await page.click('[data-add="box"]'); await page.waitForTimeout(300); for (const [t, i, v] of [['scl', 0, 4], ['scl', 1, 3], ['scl', 2, 0.2], ['pos', 1, 1.5]]) await page.$eval(`input[data-t="${t}"][data-i="${i}"]`, (e, v) => { e.value = String(v); e.dispatchEvent(new Event('change', { bubbles: true })); }, v); await page.waitForTimeout(200); };
+await addWall(); await page.waitForTimeout(300);
 const setBend = async (v) => { await page.$eval('[data-param="bend"]', (e, v) => { e.value = String(v); e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); }, v); await page.waitForTimeout(300); };
 /** angle (deg) between the two end caps' outward normals, measured from the geometry */
 const endAngle = () => page.evaluate(() => {

@@ -39,10 +39,11 @@ ok('crate drops back to the ground', Math.abs(c.pos[1] - 0.25) < 1e-6, JSON.stri
 
 // curved wall: scale-box thickness handle must not explode the wall
 await page.evaluate(() => { const s = __mt.getState(); });
-await page.click('[data-add="wall"]'); await page.waitForTimeout(300);
+const addWall = async () => { await page.click('[data-add="box"]'); await page.waitForTimeout(300); for (const [t, i, v] of [['scl', 0, 4], ['scl', 1, 3], ['scl', 2, 0.2], ['pos', 1, 1.5]]) await page.$eval(`input[data-t="${t}"][data-i="${i}"]`, (e, v) => { e.value = String(v); e.dispatchEvent(new Event('change', { bubbles: true })); }, v); await page.waitForTimeout(200); };
+await addWall(); await page.waitForTimeout(300);
 await page.$eval('[data-param="bend"]', (e) => { e.value = '120'; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); });
 await page.waitForTimeout(300);
-const wall0 = (await st()).nodes.find((n) => n.name.startsWith('Wall'));
+const wall0 = (await st()).nodes.find((n) => n.name.startsWith('Box') && n.scl[0] === 4);
 await page.keyboard.press('3'); await page.waitForTimeout(300);
 const handle = (p) => page.evaluate((p) => { const h = __mt.sbox.handles.find((m) => m.userData.handle.p.join() === p.join()); const v = h.getWorldPosition(new h.position.constructor()).project(__mt.camera); const r = document.querySelector('#view').getBoundingClientRect(); return { x: r.left + ((v.x + 1) / 2) * r.width, y: r.top + ((1 - v.y) / 2) * r.height }; }, p);
 const h1 = await handle([0, -1, 1]), h0 = await handle([0, -1, -1]);

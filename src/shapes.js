@@ -30,6 +30,10 @@ export const SHAPES = {
     defaults: { radius: 0.25, length: 0.5, detail: 2 },
     limits: { radius: [0.05, 0.5], length: [0, 2], detail: [1, 4] },
   },
+  // sharp cylinder along Y: diameter 1, height 1 before size
+  cylinder: { defaults: { detail: 2 }, limits: { detail: [1, 4] } },
+  // doorway / hallway opening: square bottom, rounded top; built at its real size so the top stays round
+  arch: { defaults: { round: 1, detail: 2 }, limits: { round: [0, 1], detail: [1, 4] } },
   // Geometry for 'svg' parts is built by svg.js from the project's asset store.
   svg: {
     defaults: { depth: 0.3, detail: 2 },
@@ -242,6 +246,46 @@ export function isBent(type, params) {
   return type === 'box' && Math.abs(Number(params && params.bend) || 0) >= 0.5;
 }
 
+/** Shapes built at their real size (the mesh is never scaled): curved walls and arches. */
+export function isRealSize(type, params) {
+  return type === 'arch' || isBent(type, params);
+}
+
+function cylinder({ detail }) {
+  const d = Math.max(1, Math.round(detail));
+  const g = new THREE.CylinderGeometry(0.5, 0.5, 1, 16 * d, 1, false);
+  g.clearGroups();
+  return g;
+}
+
+/**
+ * Archway: a rectangle with a rounded top, extruded through its depth (Z). round = 1 is a
+ * true half circle (rise = half the width), 0 is a flat top. Built at real size, so the
+ * curve stays circular however wide or tall the opening gets.
+ */
+function arch({ round, detail }, size) {
+  const [W, H, D] = size;
+  const hw = W / 2;
+  const rise = Math.min(H, Math.max(0, round) * hw);
+  const segs = 8 * Math.max(1, Math.round(detail));
+  const sh = new THREE.Shape();
+  sh.moveTo(-hw, -H / 2);
+  sh.lineTo(hw, -H / 2);
+  sh.lineTo(hw, H / 2 - rise);
+  if (rise > 1e-4) {
+    for (let i = 1; i < segs; i++) {
+      const a = (i / segs) * PI;
+      sh.lineTo(hw * Math.cos(a), H / 2 - rise + rise * Math.sin(a));
+    }
+  } else sh.lineTo(0, H / 2);
+  sh.lineTo(-hw, H / 2 - rise);
+  sh.closePath();
+  const g = new THREE.ExtrudeGeometry(sh, { depth: D, bevelEnabled: false, curveSegments: 1, steps: 1 });
+  g.translate(0, 0, -D / 2);
+  g.clearGroups();
+  return g;
+}
+
 export function makeGeometry(type, params, size = [1, 1, 1]) {
   if (type === 'box') {
     if (isBent(type, params)) return curvedBox(params.bend, size);
@@ -250,5 +294,7 @@ export function makeGeometry(type, params, size = [1, 1, 1]) {
     return g;
   }
   if (type === 'pill') return pill(params);
+  if (type === 'cylinder') return cylinder(params);
+  if (type === 'arch') return arch(params, size);
   return superellipsoid(params);
 }

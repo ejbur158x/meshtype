@@ -1,4 +1,4 @@
-// Meshtype v0.8.0
+// Meshtype v0.8.1
 // A small browser mesh editor: squircle primitives, union / negate / split,
 // edge rounding, SVG extrusion, GLB export.
 
@@ -8,24 +8,26 @@ import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { OBJExporter } from 'three/addons/exporters/OBJExporter.js';
 import { Brush, Evaluator, ADDITION, SUBTRACTION, INTERSECTION } from 'three-bvh-csg';
-import { SHAPES, makeGeometry, isBent } from './shapes.js';
-import { MATERIALS, applyMaterial, makeAeroEnvironment } from './materials.js';
+import { SHAPES, makeGeometry, isBent, isRealSize } from './shapes.js';
+import { MATERIALS, applyMaterial, makeAeroEnvironment, makeClearSkyEnvironment } from './materials.js';
 import { inspectSvg, makeSvgGeometry } from './svg.js';
 import { roundMesh, boxUVs } from './rounder.js';
 import { FLOORS, floorMaterial } from './floor.js';
 import { createFx, sanitizeFx, MODEL_LAYER } from './fx.js';
+import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
 
-const VERSION = '0.8.0';
+const VERSION = '0.8.1';
 const STORE_KEY = 'meshtype.autosave';
 
 const PRESETS = {
   box: { label: 'Box', type: 'box', params: { bend: 0 }, scl: [1, 1, 1], onFloor: true },
-  wall: { label: 'Wall', type: 'box', params: { bend: 0 }, scl: [4, 3, 0.2], onFloor: true },
   block: { label: 'Block', type: 'squircle', params: { nPlan: 4, nProf: 4, detail: 2 }, scl: [1, 1, 1] },
   panel: { label: 'Panel', type: 'squircle', params: { nPlan: 5, nProf: 10, detail: 2 }, scl: [2, 0.14, 1.4] },
   disc: { label: 'Disc', type: 'squircle', params: { nPlan: 2, nProf: 10, detail: 2 }, scl: [1, 0.2, 1] },
   orb: { label: 'Orb', type: 'squircle', params: { nPlan: 2, nProf: 2, detail: 2 }, scl: [1, 1, 1] },
   pill: { label: 'Pill', type: 'pill', params: { radius: 0.25, length: 0.5, detail: 2 }, scl: [1, 1, 1] },
+  cylinder: { label: 'Cylinder', type: 'cylinder', params: { detail: 2 }, scl: [1, 1, 1], onFloor: true },
+  arch: { label: 'Arch', type: 'arch', params: { round: 1, detail: 2 }, scl: [1.2, 2.4, 0.4], onFloor: true },
 };
 
 const SHAPE_UI = {
@@ -40,6 +42,11 @@ const SHAPE_UI = {
     ['detail', 'Detail', 1, 4, 1],
   ],
   box: [['bend', 'Curve angle° (bends the whole length)', -360, 360, 5]],
+  cylinder: [['detail', 'Sides (detail)', 1, 4, 1]],
+  arch: [
+    ['round', 'Top roundness (1 = half circle, 0 = flat)', 0, 1, 0.05],
+    ['detail', 'Curve detail', 1, 4, 1],
+  ],
   svg: [
     ['depth', 'Extrude depth', 0.02, 2, 0.01],
     ['detail', 'Curve detail', 1, 4, 1],
@@ -165,7 +172,7 @@ function sanitizeFloors(data, nextId) {
   return out;
 }
 
-let state = { name: 'untitled', nodes: [], assets: {}, sel: [], active: null, nextId: 1, floor: sanitizeFloor(), floors: [], sun: null };
+let state = { name: 'untitled', nodes: [], assets: {}, sel: [], active: null, nextId: 1, floor: sanitizeFloor(), floors: [], sun: null, spawn: null };
 const view = {
   mode: 'translate',
   sunMode: false,
@@ -183,7 +190,49 @@ const view = {
   align: { axis: null, edge: 'center', target: 'avg' },
   center: { x: true, y: true, z: true },
   fx: loadFx(),
+  fov: loadNum('meshtype.fov', 40, 20, 100),
+  walk: loadWalk(),
 };
+function loadNum(key, d, a, b) {
+  try {
+    const v = Number(localStorage.getItem(key));
+    return localStorage.getItem(key) != null && Number.isFinite(v) ? Math.min(b, Math.max(a, v)) : d;
+  } catch (e) {
+    return d;
+  }
+}
+function sanitizeWalk(raw) {
+  const WALK_DEFAULTS = { fov: 75, speed: 1.4, eye: 1.6 };
+  const r = raw && typeof raw === 'object' ? raw : {};
+  const num = (v, d, a, b) => (Number.isFinite(Number(v)) && v !== null && v !== '' ? Math.min(b, Math.max(a, Number(v))) : d);
+  return {
+    fov: num(r.fov, WALK_DEFAULTS.fov, 40, 110),
+    speed: num(r.speed, WALK_DEFAULTS.speed, 0.5, 5),
+    eye: num(r.eye, WALK_DEFAULTS.eye, 0.8, 2.2),
+    collide: typeof r.collide === 'boolean' ? r.collide : true,
+    gravity: typeof r.gravity === 'boolean' ? r.gravity : true,
+  };
+}
+function loadWalk() {
+  try {
+    return sanitizeWalk(JSON.parse(localStorage.getItem('meshtype.walk') || 'null'));
+  } catch (e) {
+    return sanitizeWalk(null);
+  }
+}
+function saveView() {
+  try {
+    localStorage.setItem('meshtype.fov', String(view.fov));
+    localStorage.setItem('meshtype.walk', JSON.stringify(view.walk));
+  } catch (e) {
+    /* private window */
+  }
+}
+function sanitizeSpawn(raw) {
+  if (!raw || !Array.isArray(raw.pos) || raw.pos.length !== 3 || !raw.pos.every((v) => Number.isFinite(Number(v)))) return null;
+  const yaw = Number(raw.yaw);
+  return { pos: raw.pos.map((v) => Math.round(Number(v) * 1000) / 1000), yaw: Number.isFinite(yaw) ? ((((yaw + 180) % 360) + 360) % 360) - 180 : 0 };
+}
 function loadFx() {
   try {
     const saved = localStorage.getItem('meshtype.fx');
@@ -581,7 +630,7 @@ scene.backgroundBlurriness = 0.12;
 const plainBg = new THREE.Color(0xd6eaf6);
 scene.background = env.sky;
 
-const camera = new THREE.PerspectiveCamera(40, 1, 0.05, 200);
+const camera = new THREE.PerspectiveCamera(view.fov, 1, 0.05, 200);
 camera.position.set(2.6, 1.7, 3.1);
 
 const sun = new THREE.DirectionalLight(0xffffff, 1.1);
@@ -1038,7 +1087,7 @@ function ensureRT(o) {
 function syncRT(o) {
   const r = ensureRT(o);
   // a curved box is built at its real size, so its size is part of the geometry key
-  const bent = isBent(o.type, o.params);
+  const bent = isRealSize(o.type, o.params);
   const key = o.type + (o.asset || '') + JSON.stringify(o.params) + (bent ? JSON.stringify(o.scl) : '');
   if (r.key !== key) {
     const old = r.geo;
@@ -1443,7 +1492,7 @@ function updatePartLights() {
       continue;
     }
     placePartLight(o, r);
-    if (r.cone) r.cone.visible = pick.has(id) || view.cages;
+    if (r.cone) r.cone.visible = !walk.on && (pick.has(id) || view.cages);
   }
   // backlit textures may finish loading after the light was made: catch the color up now and then
   if (++_avgTick.n % 30 === 0) for (const id of plt.keys()) refreshPartLightColor(id);
@@ -1500,7 +1549,7 @@ function flatCoords(o, g) {
   const flat = g.attributes.flat;
   const flatN = g.attributes.flatN;
   const nor = g.attributes.normal;
-  const sv = flat ? [1, 1, 1] : o.scl;
+  const sv = flat || isRealSize(o.type, o.params) ? [1, 1, 1] : o.scl;
   const n = pos.count;
   const P = new Float32Array(n * 3);
   const N = new Float32Array(n * 3);
@@ -1646,7 +1695,7 @@ function worldMatrixOf(o) {
     new THREE.Vector3().fromArray(o.pos),
     new THREE.Quaternion().setFromEuler(new THREE.Euler(deg2rad(o.rot[0]), deg2rad(o.rot[1]), deg2rad(o.rot[2]), 'XYZ')),
     // a curved wall is built at its real size, so its mesh is never scaled
-    isBent(o.type, o.params) ? new THREE.Vector3(1, 1, 1) : new THREE.Vector3().fromArray(o.scl)
+    isRealSize(o.type, o.params) ? new THREE.Vector3(1, 1, 1) : new THREE.Vector3().fromArray(o.scl)
   );
 }
 
@@ -1796,7 +1845,7 @@ transform.addEventListener('objectChange', () => {
       eu.setFromQuaternion(q, 'XYZ');
       o.pos = [round(p.x), round(p.y), round(p.z)];
       o.rot = [round(rad2deg(eu.x), 2), round(rad2deg(eu.y), 2), round(rad2deg(eu.z), 2)];
-      if (o.kind !== 'light' && !isBent(o.type, o.params)) o.scl = [round(Math.max(0.01, s.x)), round(Math.max(0.01, s.y)), round(Math.max(0.01, s.z))];
+      if (o.kind !== 'light' && !isRealSize(o.type, o.params)) o.scl = [round(Math.max(0.01, s.x)), round(Math.max(0.01, s.y)), round(Math.max(0.01, s.z))];
       syncNode(o);
     }
     requestSolve();
@@ -2269,7 +2318,7 @@ async function settleRounds() {
 const hist = { stack: [], i: -1 };
 
 function projectData() {
-  return { app: 'meshtype', version: VERSION, name: state.name, nextId: state.nextId, nodes: state.nodes, assets: state.assets, floor: state.floor, floors: state.floors, sun: state.sun };
+  return { app: 'meshtype', version: VERSION, name: state.name, nextId: state.nextId, nodes: state.nodes, assets: state.assets, floor: state.floor, floors: state.floors, sun: state.sun, spawn: state.spawn };
 }
 
 function snapshot() {
@@ -2348,8 +2397,10 @@ function restore(data) {
     floor: sanitizeFloor(data.floor),
     floors: [],
     sun: sanitizeSun(data.sun),
+    spawn: sanitizeSpawn(data.spawn),
   };
   syncSun();
+  syncSpawn();
   const counter = { value: state.nextId };
   state.floors = sanitizeFloors(data, counter);
   state.nextId = Math.max(state.nextId, counter.value, ...state.floors.map((f) => f.id + 1));
@@ -2406,7 +2457,7 @@ function addObject(presetId) {
   if (!p) return;
   const id = state.nextId;
   const pos = p.onFloor ? [0, p.scl[1] / 2, 0] : [0, 0, 0];
-  const o = newPart({ name: `${p.label} ${id}`, type: p.type, params: p.params, scl: p.scl, pos, mat: p.type === 'box' ? 'matte' : 'glass', color: p.type === 'box' ? '#e6ebf0' : undefined });
+  const o = newPart({ name: `${p.label} ${id}`, type: p.type, params: p.params, scl: p.scl, pos, mat: ['box', 'cylinder', 'arch'].includes(p.type) ? 'matte' : 'glass', color: ['box', 'cylinder', 'arch'].includes(p.type) ? '#e6ebf0' : undefined });
   state.sel = [o.id];
   state.active = o.id;
   afterEdit();
@@ -3014,7 +3065,7 @@ function lookTargets() {
   return selLeaves().filter((o) => o.kind === 'part');
 }
 
-const RESHAPE = ['box', 'block', 'panel', 'disc', 'orb', 'pill'];
+const RESHAPE = ['box', 'cylinder', 'arch', 'block', 'panel', 'disc', 'orb', 'pill'];
 /** Change shape: swap the shape but keep size, place, rotation and material. */
 function reshapeHTML(parts) {
   const ok = parts.filter((o) => o.type !== 'svg');
@@ -3211,8 +3262,12 @@ ${arrangeHTML()}
     n.type === 'squircle'
       ? '<p class="tip">n = 2 is round, n = 4 is a classic squircle, higher gets boxier.</p>'
       : n.type === 'box'
-        ? '<p class="tip">Sharp box: 12 triangles, perfect corners. Use it for walls, floors and room shells you never see the edges of. Size it with Scale (3).</p>'
-        : '';
+        ? '<p class="tip">Sharp box: 12 triangles, perfect corners. Stretch it into walls, floors, ceilings and room shells with Scale (3).</p>'
+        : n.type === 'arch'
+          ? '<p class="tip">Archway. Make it a <b>Cutter</b> and UNION it with a wall (a bit thicker than the wall) for a doorway or hallway opening; leave it Solid for an arched block. The top stays round however you resize it.</p>'
+          : n.type === 'cylinder'
+            ? '<p class="tip">Sharp cylinder: flat caps, no rounded edges. Pillars, pipes, round tables.</p>'
+            : '';
   el.inspector.innerHTML = `${head}
 <h2>Shape</h2>
 ${reshapeHTML([n])}
@@ -3732,7 +3787,7 @@ function scaleFrame() {
     const r = rt.get(o.id);
     if (!r || !r.geo || !r.geo.attributes.position || !r.geo.attributes.position.count) return null;
     if (!r.geo.boundingBox) r.geo.computeBoundingBox();
-    const s = isBent(o.type, o.params) ? new THREE.Vector3(1, 1, 1) : new THREE.Vector3().fromArray(o.scl);
+    const s = isRealSize(o.type, o.params) ? new THREE.Vector3(1, 1, 1) : new THREE.Vector3().fromArray(o.scl);
     const min = r.geo.boundingBox.min.clone().multiply(s);
     const max = r.geo.boundingBox.max.clone().multiply(s);
     const Q = new THREE.Quaternion().setFromEuler(new THREE.Euler(deg2rad(o.rot[0]), deg2rad(o.rot[1]), deg2rad(o.rot[2]), 'XYZ'));
@@ -4013,15 +4068,21 @@ $('#chk-cages').addEventListener('change', (e) => {
 /* sky: Aero (procedural), a solid color, or an uploaded panorama */
 
 const SKY_KEY = 'meshtype.sky';
-const sky = { mode: 'aero', color: '#bfe9ff', image: null, reflect: true };
+const sky = { mode: 'aero', color: '#bfe9ff', image: null, reflect: true, colorReflect: 'clear' };
 let skyTex = null;
 let skyEnv = null;
+let clearEnv = null;
+const clearSky = () => clearEnv || (clearEnv = makeClearSkyEnvironment(renderer));
 
 function applySky() {
   if (sky.mode === 'color') {
     scene.background = new THREE.Color(sky.color);
     scene.backgroundBlurriness = 0;
-    scene.environment = env.envMap;
+    scene.environment = sky.colorReflect === 'aero' ? env.envMap : clearSky().envMap;
+  } else if (sky.mode === 'clear') {
+    scene.background = clearSky().sky;
+    scene.backgroundBlurriness = 0;
+    scene.environment = clearSky().envMap;
   } else if (sky.mode === 'image' && skyTex) {
     scene.background = skyTex;
     scene.backgroundBlurriness = 0;
@@ -4036,7 +4097,15 @@ function applySky() {
   if (c) c.value = sky.color;
   const r = $('#sky-reflect');
   if (r) r.checked = sky.reflect;
+  document.querySelectorAll('[data-skyref]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.skyref === sky.colorReflect)));
 }
+document.querySelectorAll('[data-skyref]').forEach((b) =>
+  b.addEventListener('click', () => {
+    sky.colorReflect = b.dataset.skyref;
+    applySky();
+    saveSky();
+  })
+);
 
 function saveSky() {
   try {
@@ -4111,12 +4180,16 @@ const FX_UI = [
     ['width', 'Thickness (px)', 0.5, 4, 0.25, 2], ['darkness', 'Darkness', 0, 1, 0.05, 2], ['color', 'Line color', 'color']]],
   ['clay', 'Clay mode', 'Everything one matte color, so you only see form, depth and shadow.', [
     ['color', 'Clay color', 'color'], ['glow', 'Glow still shows', 'check']]],
+  ['xray', 'X-ray (Z)', 'See through everything to check how things line up.', [
+    ['ghost', 'See-through surfaces', 'check'], ['opacity', 'Opacity', 0.05, 0.95, 0.05, 2], ['wire', 'Wireframe on top', 'check']]],
 ];
 const fxPanel = $('#fx-panel');
 const fxBtn = $('#btn-fx');
 function fxHTML() {
   const f = view.fx;
   return (
+    `<div class="fxsec"><b>Camera</b><label class="sl"><span class="lb">Field of view</span><output id="out-fov">${view.fov}°</output>
+<input type="range" id="fx-fov" min="20" max="100" step="1" value="${view.fov}"></label><p class="tip">Editor view (PERSP). Walk mode has its own FOV.</p></div>` +
     FX_UI.map(([g, label, tip, ctrls]) => {
       const S = f[g];
       const body = ctrls
@@ -4138,6 +4211,8 @@ function fxHTML() {
 function applyFx(rerender) {
   view.fx = fx.set(view.fx);
   saveFx();
+  const xb = $('#btn-xray');
+  if (xb) xb.setAttribute('aria-pressed', String(view.fx.xray.on));
   // shadows from lights depend on these settings
   for (const o of state.nodes) {
     if (o.kind === 'light') syncLight(o);
@@ -4152,8 +4227,20 @@ function toggleFxPanel(open) {
   fxBtn.setAttribute('aria-expanded', String(show));
 }
 fxBtn.addEventListener('click', () => toggleFxPanel());
+function toggleXray() {
+  view.fx.xray.on = !view.fx.xray.on;
+  applyFx(!fxPanel.hidden);
+}
+$('#btn-xray').addEventListener('click', toggleXray);
+$('#btn-xray').setAttribute('aria-pressed', String(view.fx.xray.on));
 fxPanel.addEventListener('input', (e) => {
   const t = e.target;
+  if (t.id === 'fx-fov') {
+    setFov(Number(t.value));
+    const o = $('#out-fov');
+    if (o) o.textContent = `${view.fov}°`;
+    return;
+  }
   if (!t.dataset.fx) return;
   const [g, k] = t.dataset.fx.split('.');
   if (t.type === 'checkbox') view.fx[g][k] = t.checked;
@@ -4639,6 +4726,9 @@ function menuItems() {
   const n = sel.length === 1 ? node(sel[0]) : null;
   if (!sel.length) {
     return [
+      { label: 'Add Box', act: 'add:box' },
+      { label: 'Add Cylinder', act: 'add:cylinder' },
+      { label: 'Add Arch', act: 'add:arch' },
       { label: 'Add Block', act: 'add:block' },
       { label: 'Add Panel', act: 'add:panel' },
       { label: 'Add Disc', act: 'add:disc' },
@@ -4780,6 +4870,22 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (typing) return;
+  if (walk.on) {
+    if (k === 'escape' || k === 'p') stopWalk();
+    else if (FLY_KEYS.has(k)) {
+      fly.keys.add(k);
+      e.preventDefault();
+    }
+    return;
+  }
+  if (placing.on && k === 'escape') {
+    setPlacing(false);
+    return;
+  }
+  if (k === 'p' && !mod && !e.altKey) {
+    startWalk();
+    return;
+  }
   if (FLY_KEYS.has(k) && !e.altKey && !e.metaKey) {
     fly.keys.add(k);
     fly.lastAt = performance.now();
@@ -4817,6 +4923,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'o') setSpace(view.space === 'world' ? 'local' : 'world');
   else if (k === 'l') setSunMode(!view.sunMode);
   else if (k === 'f') frameSelected();
+  else if (k === 'z') toggleXray();
   else if (k === 'u') doUnion('union');
   else if (k === 'n') doNegate();
   else if (k === 'x') doSplit();
@@ -4883,9 +4990,9 @@ const lensScale = () => Math.tan(deg2rad(NORMAL_FOV / 2)) / Math.tan(deg2rad(cam
 function setIso(on) {
   if (view.iso === on) return;
   const dir = camera.position.clone().sub(orbit.target);
-  const k = Math.tan(deg2rad((on ? NORMAL_FOV : ISO_FOV) / 2)) / Math.tan(deg2rad((on ? ISO_FOV : NORMAL_FOV) / 2));
+  const k = Math.tan(deg2rad((on ? view.fov : ISO_FOV) / 2)) / Math.tan(deg2rad((on ? ISO_FOV : view.fov) / 2));
   view.iso = on;
-  camera.fov = on ? ISO_FOV : NORMAL_FOV;
+  camera.fov = on ? ISO_FOV : view.fov;
   camera.near = on ? 1 : 0.05;
   camera.far = on ? 20000 : 200;
   camera.position.copy(orbit.target).addScaledVector(dir, k);
@@ -4940,6 +5047,366 @@ el.canvas.addEventListener(
   },
   { passive: false }
 );
+
+/* ------------------------------------------------------------------ */
+/* spawn point + walk mode                                             */
+/* ------------------------------------------------------------------ */
+
+/** An orange figure: where walk mode (and the game, via the export) puts the player. */
+function makeFigure(material) {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.17, 0.75, 6, 14), material);
+  body.position.y = 0.6;
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.15, 18, 12), material);
+  head.position.y = 1.32;
+  const nose = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.28, 12), material);
+  nose.rotation.x = -Math.PI / 2;
+  nose.position.set(0, 0.95, -0.3); // points the way the player faces (-Z)
+  const ring = new THREE.Mesh(new THREE.RingGeometry(0.22, 0.32, 28), material);
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.01;
+  g.add(body, head, nose, ring);
+  return g;
+}
+const spawnMat = new THREE.MeshStandardMaterial({ color: 0xff8a1f, emissive: 0xff6a00, emissiveIntensity: 0.35, roughness: 0.45 });
+const ghostMat = new THREE.MeshBasicMaterial({ color: 0xff8a1f, transparent: true, opacity: 0.55, depthWrite: false });
+const spawnMarker = makeFigure(spawnMat);
+spawnMarker.visible = false;
+scene.add(spawnMarker);
+const spawnGhost = makeFigure(ghostMat);
+spawnGhost.visible = false;
+spawnGhost.traverse((o) => (o.renderOrder = 25));
+scene.add(spawnGhost);
+
+function syncSpawn() {
+  const sp = state.spawn;
+  spawnMarker.visible = !!sp && !walk.on;
+  if (sp) {
+    spawnMarker.position.fromArray(sp.pos);
+    spawnMarker.rotation.set(0, deg2rad(sp.yaw), 0);
+  }
+  const b = $('#btn-walk');
+  if (b) b.disabled = false;
+}
+
+/** Camera heading in degrees around Y (0 = looking down -Z). */
+function cameraYaw() {
+  const f = camera.getWorldDirection(new THREE.Vector3());
+  return rad2deg(Math.atan2(-f.x, -f.z));
+}
+
+/* placing: click the orange figure, hover, click the ground */
+const placing = { on: false, hit: null };
+function setPlacing(on) {
+  placing.on = on;
+  placing.hit = null;
+  spawnGhost.visible = false;
+  el.canvas.style.cursor = on ? 'crosshair' : '';
+  const b = $('#btn-spawn');
+  if (b) b.setAttribute('aria-pressed', String(on));
+  const hint = $('#hint');
+  if (hint) hint.textContent = on ? 'SPAWN · click the floor where the player starts (facing the way you look) · Esc cancels' : 'WASD fly · Q down · E up · Shift fine · Ctrl fast · right-click for the menu';
+}
+/** Where a spawn would land under the cursor: the first upward-facing surface, else the ground. */
+function spawnHitAt(clientX, clientY) {
+  const rect = el.canvas.getBoundingClientRect();
+  raycaster.setFromCamera(new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1), camera);
+  raycaster.far = Infinity;
+  const hits = raycaster.intersectObjects(surfaceTargets({ tops: new Set(), ids: new Set() }), false);
+  for (const h of hits) {
+    if (!h.face) continue;
+    const n = h.face.normal.clone().transformDirection(h.object.matrixWorld);
+    if (n.y > 0.5) return h.point.clone();
+  }
+  const ground = new THREE.Vector3();
+  if (raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), ground)) return ground;
+  return null;
+}
+el.canvas.addEventListener(
+  'pointermove',
+  (e) => {
+    if (!placing.on) return;
+    placing.hit = spawnHitAt(e.clientX, e.clientY);
+    spawnGhost.visible = !!placing.hit;
+    if (placing.hit) {
+      spawnGhost.position.copy(placing.hit);
+      spawnGhost.rotation.set(0, deg2rad(cameraYaw()), 0);
+    }
+  },
+  true
+);
+el.canvas.addEventListener(
+  'pointerdown',
+  (e) => {
+    if (walk.on) {
+      // in walk mode a click only grabs the mouse for looking around
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      if (e.button === 0) lockPointer();
+      return;
+    }
+    if (!placing.on) return;
+    e.stopImmediatePropagation();
+    e.preventDefault();
+    if (e.button !== 0) {
+      setPlacing(false);
+      return;
+    }
+    const hit = spawnHitAt(e.clientX, e.clientY);
+    setPlacing(false);
+    if (!hit) return;
+    state.spawn = sanitizeSpawn({ pos: hit.toArray(), yaw: cameraYaw() });
+    syncSpawn();
+    commit();
+    startWalk();
+  },
+  true
+);
+
+/* walking */
+const walk = { on: false, yaw: 0, pitch: 0, feet: new THREE.Vector3(), vy: 0, saved: null, colliders: [], built: [], drag: null };
+const STEP_UP = 0.4; // walks up steps and small ledges this high
+const BODY_R = 0.28;
+const walkRay = new THREE.Raycaster();
+walkRay.firstHitOnly = true;
+
+function walkColliders() {
+  const out = [];
+  for (const m of surfaceTargets({ tops: new Set(), ids: new Set() })) {
+    // parts tagged no-collide have no collision in Godot either, so you walk through them here too
+    let id = null;
+    for (const u of units.values()) if (u.mesh === m) id = u.id;
+    for (const [pid, r] of rt) if (r.part === m) id = pid;
+    const n = id != null ? node(id) : null;
+    if (n && (n.tags || []).includes('no-collide')) continue;
+    out.push(m);
+  }
+  return out;
+}
+function lockPointer() {
+  try {
+    const r = el.canvas.requestPointerLock && el.canvas.requestPointerLock();
+    if (r && r.catch) r.catch(() => {});
+  } catch (e) {
+    /* not allowed here: drag to look instead */
+  }
+}
+function startWalk() {
+  if (walk.on) return;
+  if (!state.spawn) {
+    setPlacing(true);
+    toast('Pick where to start first: click the floor.');
+    return;
+  }
+  setPlacing(false);
+  if (view.sunMode) setSunMode(false);
+  walk.saved = {
+    pos: camera.position.clone(), target: orbit.target.clone(), fov: camera.fov, near: camera.near, far: camera.far,
+    iso: view.iso, pivot: view.pivot, up: camera.up.clone(),
+  };
+  if (view.iso) setIso(false);
+  walk.on = true;
+  walk.feet.fromArray(state.spawn.pos);
+  walk.yaw = deg2rad(state.spawn.yaw);
+  walk.pitch = 0;
+  walk.vy = 0;
+  orbit.enabled = false;
+  transform.getHelper().visible = false;
+  // editor helpers (sun, handles, cages, bulbs) stay out of the way while walking
+  const helpers = [sunHandle, sunLine, sbox.group, planeMesh];
+  for (const r of rt.values()) helpers.push(r.wire, r.fill);
+  for (const r of lrt.values()) helpers.push(r.bulb, r.sel, ...(r.cone ? [r.cone] : []));
+  for (const r of plt.values()) if (r.cone) helpers.push(r.cone);
+  for (const u of units.values()) helpers.push(...[u.overlay, u.edges].filter(Boolean));
+  walk.hidden = helpers.map((o) => [o, o.visible]);
+  for (const o of helpers) o.visible = false;
+  walk.colliders = walkColliders();
+  walk.built = [];
+  for (const m of walk.colliders) {
+    const g = m.geometry;
+    if (!g.boundsTree) {
+      g.computeBoundsTree = computeBoundsTree;
+      g.computeBoundsTree();
+      walk.built.push(g);
+    }
+    m.raycast = acceleratedRaycast;
+  }
+  camera.fov = view.walk.fov;
+  camera.near = 0.03;
+  camera.far = 500;
+  camera.updateProjectionMatrix();
+  document.body.classList.add('walking');
+  syncSpawn();
+  renderWalkHud();
+  $('#walk-hud').hidden = false;
+  lockPointer();
+  placeWalkCamera();
+}
+function stopWalk() {
+  if (!walk.on) return;
+  walk.on = false;
+  if (document.pointerLockElement === el.canvas) document.exitPointerLock();
+  for (const m of walk.colliders) m.raycast = THREE.Mesh.prototype.raycast;
+  for (const g of walk.built) {
+    g.disposeBoundsTree = disposeBoundsTree;
+    g.disposeBoundsTree();
+  }
+  walk.colliders = [];
+  walk.built = [];
+  const sv = walk.saved;
+  camera.position.copy(sv.pos);
+  camera.up.copy(sv.up);
+  orbit.target.copy(sv.target);
+  camera.fov = sv.fov;
+  camera.near = sv.near;
+  camera.far = sv.far;
+  camera.updateProjectionMatrix();
+  camera.lookAt(orbit.target);
+  if (sv.iso) setIso(true);
+  orbit.enabled = true;
+  transform.getHelper().visible = true;
+  for (const [o, v] of walk.hidden || []) o.visible = v;
+  walk.hidden = null;
+  document.body.classList.remove('walking');
+  $('#walk-hud').hidden = true;
+  syncSpawn();
+}
+function placeWalkCamera() {
+  camera.position.set(walk.feet.x, walk.feet.y + view.walk.eye, walk.feet.z);
+  camera.rotation.set(walk.pitch, walk.yaw, 0, 'YXZ');
+}
+function walkRayHit(origin, dir, far) {
+  walkRay.set(origin, dir);
+  walkRay.far = far;
+  return walkRay.intersectObjects(walk.colliders, false)[0] || null;
+}
+const _wo = new THREE.Vector3();
+const _wd = new THREE.Vector3();
+function walkStep(dt) {
+  const W = view.walk;
+  const k = fly.keys;
+  const f = (k.has('w') ? 1 : 0) - (k.has('s') ? 1 : 0);
+  const r = (k.has('d') ? 1 : 0) - (k.has('a') ? 1 : 0);
+  const sy = Math.sin(walk.yaw);
+  const cy = Math.cos(walk.yaw);
+  const move = new THREE.Vector3(-sy * f + cy * r, 0, -cy * f - sy * r);
+  if (move.lengthSq() > 0) move.normalize().multiplyScalar(W.speed * (fly.shift ? 2.2 : 1) * dt);
+  if (!W.gravity) move.y = ((k.has('e') ? 1 : 0) - (k.has('q') ? 1 : 0)) * W.speed * dt;
+  walk.feet.add(move);
+  if (W.collide && walk.colliders.length) {
+    // push the body out of walls: short rays around it at knee, chest and head height
+    for (const h of [STEP_UP + 0.1, 1.0, Math.max(STEP_UP + 0.2, W.eye - 0.05)]) {
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        _wd.set(Math.cos(a), 0, Math.sin(a));
+        _wo.set(walk.feet.x, walk.feet.y + h, walk.feet.z);
+        const hit = walkRayHit(_wo, _wd, BODY_R);
+        if (hit) walk.feet.addScaledVector(_wd, -(BODY_R - hit.distance));
+      }
+    }
+  }
+  if (W.gravity) {
+    walk.vy = Math.max(-30, walk.vy - 9.8 * dt);
+    const fall = -walk.vy * dt;
+    let landed = false;
+    if (W.collide && walk.colliders.length) {
+      _wo.set(walk.feet.x, walk.feet.y + STEP_UP, walk.feet.z);
+      const hit = walkRayHit(_wo, _wd.set(0, -1, 0), STEP_UP + Math.max(0.02, fall));
+      if (hit) {
+        walk.feet.y = _wo.y - hit.distance;
+        walk.vy = 0;
+        landed = true;
+      }
+    }
+    if (!landed) walk.feet.y -= fall;
+    if (walk.feet.y < 0 && (!W.collide || !state.floors.length || !state.floor.show)) {
+      // with no floor under you, the ground (y = 0) catches you
+      walk.feet.y = 0;
+      walk.vy = 0;
+    }
+    if (walk.feet.y < -40) {
+      walk.feet.fromArray(state.spawn.pos);
+      walk.vy = 0;
+      toast('Fell out of the world. Back to the spawn point.');
+    }
+  }
+  placeWalkCamera();
+}
+document.addEventListener('mousemove', (e) => {
+  if (!walk.on) return;
+  const locked = document.pointerLockElement === el.canvas;
+  if (!locked && !walk.drag) return;
+  walk.yaw -= e.movementX * 0.0022;
+  walk.pitch = clamp(walk.pitch - e.movementY * 0.0022, -1.5, 1.5);
+});
+// without pointer lock (some browsers, automation), hold the left button and drag to look
+el.canvas.addEventListener('mousedown', (e) => {
+  if (walk.on && e.button === 0) walk.drag = true;
+});
+window.addEventListener('mouseup', () => (walk.drag = false));
+document.addEventListener('pointerlockchange', () => {
+  const hud = $('#walk-hud');
+  if (hud) hud.classList.toggle('locked', document.pointerLockElement === el.canvas);
+});
+
+function renderWalkHud() {
+  const W = view.walk;
+  const sl = (k, label, min, max, step, dec, unit = '') => `<label class="sl"><span class="lb">${label}</span><output id="out-walk-${k}">${Number(W[k]).toFixed(dec)}${unit}</output>
+<input type="range" data-walk="${k}" min="${min}" max="${max}" step="${step}" value="${W[k]}"></label>`;
+  $('#walk-hud').innerHTML = `<div class="wh-head"><b>WALK</b><span class="wh-keys">WASD move · Shift run${W.gravity ? '' : ' · Q/E down/up'} · mouse to look · Esc to stop</span></div>
+<p class="wh-paused">Click the view to look around.</p>
+<div class="wh-row"><label class="chk"><input type="checkbox" data-walk="collide" ${W.collide ? 'checked' : ''}> Collide</label>
+<label class="chk"><input type="checkbox" data-walk="gravity" ${W.gravity ? 'checked' : ''}> Gravity</label></div>
+${sl('fov', 'FOV', 40, 110, 1, 0, '°')}${sl('speed', 'Walk speed (m/s)', 0.5, 5, 0.1, 1)}${sl('eye', 'Eye height (m)', 0.8, 2.2, 0.05, 2)}
+<div class="inline"><button type="button" data-walkact="spawn">Back to spawn</button><button type="button" data-walkact="exit">Stop (Esc)</button></div>`;
+}
+{
+  const hud = $('#walk-hud');
+  hud.addEventListener('input', (e) => {
+    const t = e.target;
+    const k = t.dataset.walk;
+    if (!k) return;
+    view.walk[k] = t.type === 'checkbox' ? t.checked : Number(t.value);
+    view.walk = sanitizeWalk(view.walk);
+    const out = $(`#out-walk-${k}`);
+    if (out) out.textContent = Number(t.value).toFixed(k === 'fov' ? 0 : k === 'speed' ? 1 : 2) + (k === 'fov' ? '°' : '');
+    if (k === 'fov') {
+      camera.fov = view.walk.fov;
+      camera.updateProjectionMatrix();
+    }
+    if (k === 'gravity') {
+      walk.vy = 0;
+      renderWalkHud();
+    }
+    saveView();
+  });
+  hud.addEventListener('click', (e) => {
+    const a = e.target.closest('[data-walkact]');
+    if (!a) return;
+    if (a.dataset.walkact === 'exit') stopWalk();
+    else {
+      walk.feet.fromArray(state.spawn.pos);
+      walk.yaw = deg2rad(state.spawn.yaw);
+      walk.pitch = 0;
+      walk.vy = 0;
+    }
+  });
+}
+$('#btn-spawn').addEventListener('click', () => {
+  if (walk.on) stopWalk();
+  setPlacing(!placing.on);
+});
+$('#btn-walk').addEventListener('click', () => (walk.on ? stopWalk() : startWalk()));
+
+/** Editor camera field of view (perspective only; ISO keeps its own narrow lens). */
+function setFov(deg) {
+  view.fov = clamp(Math.round(deg), 20, 100);
+  saveView();
+  if (!view.iso && !walk.on) {
+    camera.fov = view.fov;
+    camera.updateProjectionMatrix();
+  }
+}
 
 function frameSelected() {
   let lv = selLeaves().filter((o) => o.visible);
@@ -5283,6 +5750,17 @@ async function exportRoom() {
     const dir = new THREE.Vector3().fromArray(state.sun.pos).negate().normalize();
     sunEntry = { node: S.name, godotType: 'DirectionalLight3D', color: state.sun.color, intensity: state.sun.intensity, direction: r3(dir), castShadows: state.sun.shadows };
   }
+  let spawnEntry = null;
+  if (state.spawn) {
+    const S = new THREE.Object3D();
+    S.name = uniqueName('spawn');
+    S.position.fromArray(state.spawn.pos);
+    S.rotation.set(0, deg2rad(state.spawn.yaw), 0);
+    S.userData = { meshtype: { kind: 'spawn', tags: ['spawn'] } };
+    grp.add(S);
+    const fwd = new THREE.Vector3(0, 0, -1).applyEuler(S.rotation);
+    spawnEntry = { node: S.name, godotType: 'Node3D', position: state.spawn.pos.slice(), yawDeg: state.spawn.yaw, forward: r3(fwd) };
+  }
   const f = state.floor;
   const floorEntries = [];
   if (f.show) {
@@ -5324,6 +5802,7 @@ async function exportRoom() {
     grid: f.grid,
     floors: floorEntries,
     sun: sunEntry,
+    spawn: spawnEntry,
     collisionSuffix: col ? '-col' : null,
     nodes: entries,
     lights,
@@ -5334,6 +5813,7 @@ async function exportRoom() {
       'Lights are in the GLB as KHR_lights_punctual (point/spot, intensity in candela).',
       'A light built into a shape is named "<shape>-light" and lists the shape in "attachedTo"; parent it to that mesh in Godot if it should move with it.',
       'Decals (images on a face) are separate meshes named "<shape>-decalN" with no collision.',
+      'The spawn point (if set) is an empty node named "spawn" standing on the floor, facing its -Z (see "spawn.forward"): put the player there.',
     ],
   };
   return { grp, manifest };
@@ -5846,8 +6326,9 @@ function loop() {
   const now = performance.now();
   const dt = Math.min(0.1, (now - lastFrame) / 1000);
   lastFrame = now;
-  flyStep(dt);
-  if (viewTween.on) {
+  if (walk.on) walkStep(dt);
+  else flyStep(dt);
+  if (viewTween.on && !walk.on) {
     const p = Math.min(1, (now - viewTween.t0) / 240);
     const k = p * p * (3 - 2 * p);
     const qi = new THREE.Quaternion().slerp(viewTween.q, k);
@@ -5855,15 +6336,17 @@ function loop() {
     if (p >= 1) viewTween.on = false;
   }
   updateViewCube();
-  updateScaleBox();
+  if (!walk.on) updateScaleBox();
   // keep the sun handle a readable size and its halo facing the camera
   const sd = camera.position.distanceTo(sunHandle.position) / lensScale();
   sunHandle.scale.setScalar(Math.max(0.4, sd * 0.045));
   sunHandle.children[0].quaternion.copy(camera.quaternion);
   if (dirty && now - lastSolve > 70) solve();
   if (planeDirty) updateAlignPlane();
-  orbit.update();
-  eyeStep();
+  if (!walk.on) {
+    orbit.update();
+    eyeStep();
+  }
   updatePartLights();
   fitSunShadow(now);
   renderView();
@@ -5878,7 +6361,7 @@ function modelMeshes() {
   return out;
 }
 function renderView() {
-  fx.render(view.fx.clay.on ? modelMeshes() : []);
+  fx.render(view.fx.clay.on || view.fx.xray.on ? modelMeshes() : []);
 }
 
 /* PWA */
@@ -5930,7 +6413,7 @@ boot();
 // test / automation hooks (only with ?test or ?cli in the URL)
 const AUTOMATION = /[?&](test|cli)\b/.test(location.search);
 if (AUTOMATION) {
-  window.__mt = { transform, pivot, rt, lrt, plt, fx, sbox, camera, units, exportRoom, getState: () => state, getTarget: () => orbit.target.toArray() };
+  window.__mt = { transform, pivot, rt, lrt, plt, fx, sbox, camera, units, exportRoom, walkState: () => walk, walkSim: (keys, secs) => { fly.keys.clear(); for (const k of keys) fly.keys.add(k); for (let t = 0; t < secs; t += 1 / 60) walkStep(1 / 60); fly.keys.clear(); return walk.feet.toArray(); }, sceneEnv: () => scene.environment, aeroEnv: () => env.envMap, getState: () => state, getTarget: () => orbit.target.toArray() };
   window.__mt.cli = {
     /** Load a project, solve every boolean and wait for rounding to finish. */
     async load(raw) {
