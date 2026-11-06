@@ -81,7 +81,7 @@ With **Room JSON** ticked, Export GLB also downloads `room-name.room.json`. It l
 
 - **Spawn point**: click the orange figure (under PERSP / ORBIT), hover the floor (an orange ghost shows where you'll stand) and click. You start there facing the way the camera looks, and walk mode starts right away. Click the figure again any time to move it. The spawn exports in the GLB as an empty node named `spawn` (facing its -Z) and in the room JSON as `spawn`, so the game can put the player there too.
 - **WALK** (or `P`) walks from the spawn point. WASD to move, Shift to run, mouse to look (click the view to grab the mouse), Esc to stop. There's no jump, same as the game.
-- The panel at the top: **Collide** (walls stop you; parts tagged `no-collide` don't, same as Godot) and **Gravity** (you fall onto floors and step up anything under 40 cm; off, you float and Q/E go down/up), plus **FOV**, walk speed and eye height. Saved in this browser. **Back to spawn** if you get lost; fall off the world and you're put back.
+- The settings live in a drawer on the left edge: click the **WALK ⚙** tab to open or fold it (it starts folded and remembers how you left it; press Esc once to get the cursor back before clicking). **Head bob** adds a subtle step bob (only while walking on the ground) and **Smooth look** makes turning glide a little instead of snapping; both are on by default and both are just for feel, the real game does its own. **Collide** (walls stop you; parts tagged `no-collide` don't, same as Godot) and **Gravity** (you fall onto floors and step up anything under 40 cm; off, you float and Q/E go down/up), plus **FOV**, walk speed and eye height. Saved in this browser. **Back to spawn** if you get lost; fall off the world and you're put back.
 
 ## Sun and view
 
@@ -224,7 +224,7 @@ Aero glass, Gloss plastic, Bubble, Frosted glass, Chrome, Matte, Glow. Pick one,
 
 **Neon** glows, blooms in the viewport and lights the room: picking it turns on the object's own light (a point light, tinted to match); untick *Emit light* to keep just the glow. **Glow strength** sets how hard any glowing material shines. Neon or Glow with an image texture is a **lightbox**: the image itself shines, like a backlit print or a sign. Set the tint to white for its true colors; the light takes the image's average color.
 
-**Texture**: Image… loads a picture (PNG, JPG or SVG; shrunk to 1024 px, SVGs drawn crisp) and wraps it around the whole shape. **Tile size** is in meters on the real size of the part, so stretching a wall repeats the image instead of stretching it, and on a **curved wall** the image runs along the arc without smearing. Rounded shapes (squircles, orbs) still use a box projection, so expect some stretch near where the surface turns. The tint multiplies the image. Textures export with the GLB.
+**Texture**: Image… loads a picture (PNG, JPG or SVG; kept sharp: up to 8192 px on the long side and 16 megapixels in all, so a wide banner keeps more detail than a square one, and SVGs are drawn at that size) and wraps it around the whole shape. **Tile size** is in meters on the real size of the part, so stretching a wall repeats the image instead of stretching it, and on a **curved wall** the image runs along the arc without smearing. Rounded shapes (squircles, orbs) still use a box projection, so expect some stretch near where the surface turns. The tint multiplies the image. Textures export with the GLB.
 
 **Decals** put one image on one face, like a sticker: *Image on a face…* drops it on the side facing you, then pick the side, width, position and turn. Transparent parts of a PNG or SVG stay see-through. On curved walls the decal follows the curve. On a glowing material the decal glows too. Decals export as their own meshes (`<shape>-decal1`, no collision). A decal on a part inside a union sits on that part's face, so if a cutter removes that face the decal floats; put decals on the final surface.
 
@@ -269,7 +269,7 @@ The service worker caches the whole app. After you edit any file, regenerate the
 node tools/build-precache.mjs
 ```
 
-## Known limits (v0.8.2)
+## Known limits (v0.8.3)
 
 - Booleans are live, so keep Detail at 2 or 3 on dense scenes.
 - Scaling a rotated part from a multi-selection gizmo can introduce shear, which Meshtype can't store. Use Scale on single parts for that.
@@ -277,6 +277,7 @@ node tools/build-precache.mjs
 - Round edges is global to the unit and produces a dense mesh. It can't round just one edge.
 - No sculpting or per-vertex editing. Meshtype is a generator and combiner, not a modeler.
 - Look effects are rendered by the browser's GPU; on a weak laptop turn off ambient occlusion first. Adding or removing a light briefly recompiles shaders.
+- Big textures make big project files (images are saved inside the .meshtype.json) and use graphics memory (an 8192 px texture is about 60 MB). If the browser's storage can't hold them, autosave keeps your shapes but not the images, so use Save. Round shapes still stretch textures near turns.
 - Textures from before v0.8 used the part's unscaled size for tile size; on stretched parts they now tile in meters, so re-check the tile size.
 - Projects from v0.1.0 open as one union (cutters become red parts). Intersect layers become plain parts.
 

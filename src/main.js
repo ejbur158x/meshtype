@@ -1,4 +1,4 @@
-// Meshtype v0.8.2
+// Meshtype v0.8.3
 // A small browser mesh editor: squircle primitives, union / negate / split,
 // edge rounding, SVG extrusion, GLB export.
 
@@ -16,7 +16,7 @@ import { FLOORS, floorMaterial } from './floor.js';
 import { createFx, sanitizeFx, MODEL_LAYER } from './fx.js';
 import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
 
-const VERSION = '0.8.2';
+const VERSION = '0.8.3';
 const STORE_KEY = 'meshtype.autosave';
 
 const PRESETS = {
@@ -211,6 +211,8 @@ function sanitizeWalk(raw) {
     eye: num(r.eye, WALK_DEFAULTS.eye, 0.8, 2.2),
     collide: typeof r.collide === 'boolean' ? r.collide : true,
     gravity: typeof r.gravity === 'boolean' ? r.gravity : true,
+    bob: typeof r.bob === 'boolean' ? r.bob : true,
+    smooth: typeof r.smooth === 'boolean' ? r.smooth : true,
   };
 }
 function loadWalk() {
@@ -997,7 +999,7 @@ function baseTexture(assetId) {
   });
   t.colorSpace = THREE.SRGBColorSpace;
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.anisotropy = 8;
+  t.anisotropy = Math.min(16, renderer.capabilities.getMaxAnisotropy());
   texBase.set(assetId, t);
   return t;
 }
@@ -1525,7 +1527,7 @@ function decalTexture(id) {
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
-    tex.anisotropy = 8;
+    tex.anisotropy = Math.min(16, renderer.capabilities.getMaxAnisotropy());
     Object.assign(e, { tex, aspect: W / H, pad: [p / c.width, p / c.height], ready: true });
     for (const o of state.nodes) {
       if (o.kind !== 'part' || !(o.decals || []).some((d) => d.tex === id)) continue;
@@ -2323,9 +2325,69 @@ function projectData() {
   return { app: 'meshtype', version: VERSION, name: state.name, nextId: state.nextId, nodes: state.nodes, assets: state.assets, floor: state.floor, floors: state.floors, sun: state.sun, spawn: state.spawn };
 }
 
-function snapshot() {
-  return JSON.stringify({ ...projectData(), sel: state.sel, active: state.active });
+// Undo steps keep images out of their snapshots: each image lives once in this bank and a snapshot
+// only points at it (80 undo steps x several 8K textures would be gigabytes of strings).
+const assetBank = { byUrl: new Map(), byKey: new Map(), n: 0 };
+function bankKey(url) {
+  let k = assetBank.byUrl.get(url);
+  if (!k) {
+    k = 'b' + ++assetBank.n;
+    assetBank.byUrl.set(url, k);
+    assetBank.byKey.set(k, url);
+  }
+  return k;
 }
+function snapshot() {
+  const refs = {};
+  for (const [id, url] of Object.entries(state.assets)) refs[id] = bankKey(url);
+  return JSON.stringify({ ...projectData(), assets: refs, sel: state.sel, active: state.active });
+}
+/** Undo/redo: read a snapshot back into plain project data, pulling the images out of the bank. */
+function fromSnapshot(s) {
+  const d = JSON.parse(s);
+  const assets = {};
+  for (const [id, k] of Object.entries(d.assets || {})) {
+    const url = assetBank.byKey.get(k);
+    if (url != null) assets[id] = url;
+  }
+  d.assets = assets;
+  return d;
+}
+
+// Autosave writes the live document, images included. Small projects save at once; with big
+// images it waits for a pause, and if the browser's storage can't hold them it keeps the shapes.
+let saveTimer = 0;
+let saveWarned = false;
+function autosaveNow() {
+  clearTimeout(saveTimer);
+  saveTimer = 0;
+  const live = { ...projectData(), sel: state.sel, active: state.active };
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify(live));
+    return;
+  } catch (e) {
+    /* too big for storage, or storage is off */
+  }
+  if (!Object.keys(state.assets).length) return;
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify({ ...live, assets: {} }));
+    if (!saveWarned) {
+      saveWarned = true;
+      toast('Those images are too big for autosave. A reload keeps your shapes but not the images, so use Save to keep them.');
+    }
+  } catch (e) {
+    /* storage unavailable, autosave skipped */
+  }
+}
+function scheduleAutosave() {
+  let bytes = 0;
+  for (const v of Object.values(state.assets)) bytes += v.length;
+  if (bytes < 1.5e6) autosaveNow();
+  else if (!saveTimer) saveTimer = setTimeout(autosaveNow, 700);
+}
+window.addEventListener('pagehide', () => {
+  if (saveTimer) autosaveNow();
+});
 
 function gcAssets() {
   const used = new Set();
@@ -2346,11 +2408,7 @@ function commit() {
   hist.stack.push(s);
   if (hist.stack.length > 80) hist.stack.shift();
   hist.i = hist.stack.length - 1;
-  try {
-    localStorage.setItem(STORE_KEY, s);
-  } catch (e) {
-    /* storage unavailable, autosave skipped */
-  }
+  scheduleAutosave();
   updateHistoryButtons();
 }
 
@@ -2362,7 +2420,7 @@ function updateHistoryButtons() {
 function undo() {
   if (hist.i <= 0) return;
   hist.i--;
-  restore(JSON.parse(hist.stack[hist.i]));
+  restore(fromSnapshot(hist.stack[hist.i]));
   persist();
   if (view.floorMode) attachFloorGizmo();
 }
@@ -2370,16 +2428,12 @@ function undo() {
 function redo() {
   if (hist.i >= hist.stack.length - 1) return;
   hist.i++;
-  restore(JSON.parse(hist.stack[hist.i]));
+  restore(fromSnapshot(hist.stack[hist.i]));
   persist();
 }
 
 function persist() {
-  try {
-    localStorage.setItem(STORE_KEY, hist.stack[hist.i]);
-  } catch (e) {
-    /* ignore */
-  }
+  scheduleAutosave();
   updateHistoryButtons();
 }
 
@@ -4147,9 +4201,11 @@ function loadSkyTexture(url) {
  * Read an image file into a data URL no bigger than maxW. Vector (SVG) files are drawn at
  * full size so they stay crisp; PNG/GIF/WebP/SVG keep their transparency (stickers need it).
  */
-function shrinkImage(file, maxW = 2048) {
+function shrinkImage(file, maxW = 2048, maxPx = Infinity) {
   const vector = /svg/i.test(file.type) || /\.svg$/i.test(file.name || '');
   const alpha = vector || /png|gif|webp/i.test(file.type);
+  // never ask for a texture the graphics card can't hold
+  maxW = Math.min(maxW, renderer.capabilities.maxTextureSize || maxW);
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const img = new Image();
@@ -4157,13 +4213,17 @@ function shrinkImage(file, maxW = 2048) {
       let w = img.naturalWidth || img.width;
       let h = img.naturalHeight || img.height;
       if (!w || !h) w = h = maxW;
-      const k = vector ? maxW / Math.max(w, h) : Math.min(1, maxW / Math.max(w, h));
+      // fit the long side AND the total pixel budget (a wide banner can keep far more detail than a square)
+      const fit = Math.min(maxW / Math.max(w, h), Math.sqrt(maxPx / (w * h)));
+      const k = vector ? fit : Math.min(1, fit);
       const c = document.createElement('canvas');
       c.width = Math.max(1, Math.round(w * k));
       c.height = Math.max(1, Math.round(h * k));
-      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      const g = c.getContext('2d');
+      g.imageSmoothingQuality = 'high';
+      g.drawImage(img, 0, 0, c.width, c.height);
       URL.revokeObjectURL(url);
-      resolve(alpha ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', 0.88));
+      resolve(alpha ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', 0.92));
     };
     img.onerror = () => {
       URL.revokeObjectURL(url);
@@ -4172,6 +4232,11 @@ function shrinkImage(file, maxW = 2048) {
     img.src = url;
   });
 }
+
+/** Texture images (walls, floors, stickers): sharp up close, within what a card can hold. */
+const TEX_MAX = 8192;
+const TEX_PIXELS = 16e6;
+const texImage = (file) => shrinkImage(file, TEX_MAX, TEX_PIXELS);
 
 /* ---- Look panel: viewport shading, every effect its own toggle + settings ---- */
 
@@ -5170,7 +5235,15 @@ el.canvas.addEventListener(
 );
 
 /* walking */
-const walk = { on: false, yaw: 0, pitch: 0, feet: new THREE.Vector3(), vy: 0, saved: null, colliders: [], built: [], drag: null };
+const walk = {
+  on: false, yaw: 0, pitch: 0, feet: new THREE.Vector3(), vy: 0, saved: null, colliders: [], built: [], drag: null,
+  // look inertia (mouse movement waiting to be turned into view) and head bob
+  inYaw: 0, inPitch: 0, bobT: 0, bobAmp: 0, grounded: false, bob: { x: 0, y: 0, roll: 0 },
+};
+function resetWalkFeel() {
+  walk.inYaw = walk.inPitch = walk.bobT = walk.bobAmp = 0;
+  walk.bob.x = walk.bob.y = walk.bob.roll = 0;
+}
 const STEP_UP = 0.4; // walks up steps and small ledges this high
 const BODY_R = 0.28;
 const walkRay = new THREE.Raycaster();
@@ -5216,6 +5289,7 @@ function startWalk() {
   walk.yaw = deg2rad(state.spawn.yaw);
   walk.pitch = 0;
   walk.vy = 0;
+  resetWalkFeel();
   orbit.enabled = false;
   transform.getHelper().visible = false;
   // editor helpers (sun, handles, cages, bulbs) stay out of the way while walking
@@ -5278,8 +5352,10 @@ function stopWalk() {
   syncSpawn();
 }
 function placeWalkCamera() {
-  camera.position.set(walk.feet.x, walk.feet.y + view.walk.eye, walk.feet.z);
-  camera.rotation.set(walk.pitch, walk.yaw, 0, 'YXZ');
+  const b = walk.bob;
+  // sway goes sideways relative to where you face; the body itself (and its collision) is untouched
+  camera.position.set(walk.feet.x + Math.cos(walk.yaw) * b.x, walk.feet.y + view.walk.eye + b.y, walk.feet.z - Math.sin(walk.yaw) * b.x);
+  camera.rotation.set(walk.pitch, walk.yaw, b.roll, 'YXZ');
 }
 function walkRayHit(origin, dir, far) {
   walkRay.set(origin, dir);
@@ -5293,6 +5369,17 @@ function walkStep(dt) {
   const k = fly.keys;
   const f = (k.has('w') ? 1 : 0) - (k.has('s') ? 1 : 0);
   const r = (k.has('d') ? 1 : 0) - (k.has('a') ? 1 : 0);
+  const x0 = walk.feet.x;
+  const z0 = walk.feet.z;
+  // look inertia: the mouse feeds a pending turn that glides into the view (no overshoot)
+  if (walk.inYaw || walk.inPitch) {
+    const a = W.smooth ? 1 - Math.exp(-dt * 16) : 1;
+    walk.yaw += walk.inYaw * a;
+    walk.pitch = clamp(walk.pitch + walk.inPitch * a, -1.5, 1.5);
+    walk.inYaw *= 1 - a;
+    walk.inPitch *= 1 - a;
+    if (Math.abs(walk.inYaw) < 1e-5 && Math.abs(walk.inPitch) < 1e-5) walk.inYaw = walk.inPitch = 0;
+  }
   const sy = Math.sin(walk.yaw);
   const cy = Math.cos(walk.yaw);
   const move = new THREE.Vector3(-sy * f + cy * r, 0, -cy * f - sy * r);
@@ -5329,21 +5416,35 @@ function walkStep(dt) {
       // with no floor under you, the ground (y = 0) catches you
       walk.feet.y = 0;
       walk.vy = 0;
+      landed = true;
     }
+    walk.grounded = landed;
     if (walk.feet.y < -40) {
       walk.feet.fromArray(state.spawn.pos);
       walk.vy = 0;
       toast('Fell out of the world. Back to the spawn point.');
     }
+  } else {
+    walk.grounded = false;
   }
+  // head bob: follows the ground actually covered (pushing into a wall doesn't bob), eases in and out
+  const speed = Math.hypot(walk.feet.x - x0, walk.feet.z - z0) / Math.max(dt, 1e-4);
+  const want = W.bob && walk.grounded ? Math.min(1, speed / 1.4) : 0;
+  walk.bobAmp += (want - walk.bobAmp) * (1 - Math.exp(-dt * 8));
+  walk.bobT += Math.min(speed, 8) * dt * 4.2; // about one stride per 1.5 m
+  const amp = walk.bobAmp < 0.002 ? 0 : walk.bobAmp;
+  walk.bob.y = Math.sin(walk.bobT * 2) * 0.014 * amp;
+  walk.bob.x = Math.sin(walk.bobT) * 0.008 * amp;
+  walk.bob.roll = Math.sin(walk.bobT) * 0.003 * amp;
   placeWalkCamera();
 }
 document.addEventListener('mousemove', (e) => {
   if (!walk.on) return;
   const locked = document.pointerLockElement === el.canvas;
   if (!locked && !walk.drag) return;
-  walk.yaw -= e.movementX * 0.0022;
-  walk.pitch = clamp(walk.pitch - e.movementY * 0.0022, -1.5, 1.5);
+  walk.inYaw -= e.movementX * 0.0022;
+  walk.inPitch -= e.movementY * 0.0022;
+  // with smoothing off the turn lands on the next frame in full
 });
 // without pointer lock (some browsers, automation), hold the left button and drag to look
 el.canvas.addEventListener('mousedown', (e) => {
@@ -5359,12 +5460,29 @@ function renderWalkHud() {
   const W = view.walk;
   const sl = (k, label, min, max, step, dec, unit = '') => `<label class="sl"><span class="lb">${label}</span><output id="out-walk-${k}">${Number(W[k]).toFixed(dec)}${unit}</output>
 <input type="range" data-walk="${k}" min="${min}" max="${max}" step="${step}" value="${W[k]}"></label>`;
-  $('#walk-hud').innerHTML = `<div class="wh-head"><b>WALK</b><span class="wh-keys">WASD move · Shift run${W.gravity ? '' : ' · Q/E down/up'} · mouse to look · Esc to stop</span></div>
+  const hud = $('#walk-hud');
+  if (!hud.dataset.init) {
+    hud.dataset.init = '1';
+    hud.classList.toggle('collapsed', walkHudFolded());
+  }
+  hud.innerHTML = `<button type="button" class="wh-tab" data-walkact="fold" title="Show or hide the walk settings">WALK ⚙</button>
+<div class="wh-head"><b>WALK</b></div>
+<p class="wh-keys">WASD move · Shift run${W.gravity ? '' : ' · Q/E down/up'} · mouse to look · Esc to stop</p>
 <p class="wh-paused">Click the view to look around.</p>
 <div class="wh-row"><label class="chk"><input type="checkbox" data-walk="collide" ${W.collide ? 'checked' : ''}> Collide</label>
 <label class="chk"><input type="checkbox" data-walk="gravity" ${W.gravity ? 'checked' : ''}> Gravity</label></div>
+<div class="wh-row"><label class="chk"><input type="checkbox" data-walk="bob" ${W.bob ? 'checked' : ''}> Head bob</label>
+<label class="chk"><input type="checkbox" data-walk="smooth" ${W.smooth ? 'checked' : ''}> Smooth look</label></div>
 ${sl('fov', 'FOV', 40, 110, 1, 0, '°')}${sl('speed', 'Walk speed (m/s)', 0.5, 5, 0.1, 1)}${sl('eye', 'Eye height (m)', 0.8, 2.2, 0.05, 2)}
 <div class="inline"><button type="button" data-walkact="spawn">Back to spawn</button><button type="button" data-walkact="exit">Stop (Esc)</button></div>`;
+}
+/** The walk settings live in a side drawer; it starts folded away and remembers how you left it. */
+function walkHudFolded() {
+  try {
+    return localStorage.getItem('meshtype.walkhud') !== 'open';
+  } catch (e) {
+    return true;
+  }
 }
 {
   const hud = $('#walk-hud');
@@ -5384,17 +5502,28 @@ ${sl('fov', 'FOV', 40, 110, 1, 0, '°')}${sl('speed', 'Walk speed (m/s)', 0.5, 5
       walk.vy = 0;
       renderWalkHud();
     }
+    if (k === 'bob' && !view.walk.bob) walk.bobAmp = 0;
     saveView();
   });
   hud.addEventListener('click', (e) => {
     const a = e.target.closest('[data-walkact]');
     if (!a) return;
-    if (a.dataset.walkact === 'exit') stopWalk();
-    else {
+    const act = a.dataset.walkact;
+    if (act === 'exit') stopWalk();
+    else if (act === 'fold') {
+      const folded = !hud.classList.contains('collapsed');
+      hud.classList.toggle('collapsed', folded);
+      try {
+        localStorage.setItem('meshtype.walkhud', folded ? 'closed' : 'open');
+      } catch (err) {
+        /* remembered only for this session */
+      }
+    } else {
       walk.feet.fromArray(state.spawn.pos);
       walk.yaw = deg2rad(state.spawn.yaw);
       walk.pitch = 0;
       walk.vy = 0;
+      resetWalkFeel();
     }
   });
 }
@@ -5470,7 +5599,7 @@ let floorTexTarget = null;
 let decalTarget = null;
 /** Put an image file on the face of a part that looks toward the camera. */
 async function addDecalFromFile(o, file) {
-  const url = await shrinkImage(file, 1024);
+  const url = await texImage(file);
   const id = `img${state.nextId++}`;
   state.assets[id] = url;
   const face = faceTowardCamera(o);
@@ -5500,7 +5629,7 @@ el.fileTex.addEventListener('change', async () => {
     floorTexTarget = null;
     if (!file || !fl) return;
     try {
-      const url = await shrinkImage(file, 1024);
+      const url = await texImage(file);
       const id = `img${state.nextId++}`;
       state.assets[id] = url;
       fl.tex = id;
@@ -5517,7 +5646,7 @@ el.fileTex.addEventListener('change', async () => {
   const targets = lookTargets();
   if (!file || !targets.length) return;
   try {
-    const url = await shrinkImage(file, 1024);
+    const url = await texImage(file);
     const id = `img${state.nextId++}`;
     state.assets[id] = url;
     for (const o of targets) {
@@ -6419,7 +6548,7 @@ boot();
 // test / automation hooks (only with ?test or ?cli in the URL)
 const AUTOMATION = /[?&](test|cli)\b/.test(location.search);
 if (AUTOMATION) {
-  window.__mt = { transform, pivot, rt, lrt, plt, fx, sbox, camera, units, exportRoom, hist: () => ({ i: hist.i, n: hist.stack.length }), walkState: () => walk, walkSim: (keys, secs) => { fly.keys.clear(); for (const k of keys) fly.keys.add(k); for (let t = 0; t < secs; t += 1 / 60) walkStep(1 / 60); fly.keys.clear(); return walk.feet.toArray(); }, sceneEnv: () => scene.environment, aeroEnv: () => env.envMap, getState: () => state, getTarget: () => orbit.target.toArray() };
+  window.__mt = { transform, pivot, rt, lrt, plt, fx, sbox, camera, units, exportRoom, hist: () => ({ i: hist.i, n: hist.stack.length, bytes: hist.stack.reduce((a, s) => a + s.length, 0) }), walkState: () => walk, walkSim: (keys, secs) => { fly.keys.clear(); for (const k of keys) fly.keys.add(k); for (let t = 0; t < secs; t += 1 / 60) walkStep(1 / 60); fly.keys.clear(); return walk.feet.toArray(); }, sceneEnv: () => scene.environment, aeroEnv: () => env.envMap, getState: () => state, getTarget: () => orbit.target.toArray() };
   window.__mt.cli = {
     /** Load a project, solve every boolean and wait for rounding to finish. */
     async load(raw) {
